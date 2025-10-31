@@ -4,11 +4,21 @@ const SITE_API_BASE = 'https://site.api.espn.com/apis/site/v2/sports/football/co
 const CORE_API_BASE = 'https://sports.core.api.espn.com/v2/sports/football/leagues/college-football';
 
 const statusBanner = document.getElementById('status');
-const statusText = statusBanner.querySelector('.status-text');
+const statusText = statusBanner ? statusBanner.querySelector('.status-text') : null;
 const offenseContainer = document.getElementById('offense-spotlight');
 const defenseContainer = document.getElementById('defense-spotlight');
 const cardTemplate = document.getElementById('player-card-template');
 const gameBanner = document.getElementById('game-banner');
+const debugToggle = document.getElementById('debug-toggle');
+const debugPanel = document.getElementById('debug-panel');
+const debugLogList = document.getElementById('debug-log');
+const debugCount = document.getElementById('debug-count');
+const debugClearButton = document.getElementById('debug-clear');
+const debugCloseButton = document.getElementById('debug-close');
+
+const PROXY_ENDPOINT = '/api/espn';
+const FETCH_RETRY_LIMIT = 1;
+const FETCH_TIMEOUT_MS = 9000;
 
 const BENCHMARKS = {
   passing: { lastGameMax: 400, seasonMax: 3500 },
@@ -59,26 +69,166 @@ const SEASON_DETAIL_FIELDS = {
 };
 
 const athleteCache = new Map();
+const debugEntries = [];
+let debugOpen = false;
+let debugEntryId = 0;
 
 document.addEventListener('DOMContentLoaded', () => {
+  setupDebugConsole();
+  logDebug('info', 'Debug console initialised.');
+  setContainerMessage(offenseContainer, 'Loading leaders…');
+  setContainerMessage(defenseContainer, 'Loading leaders…');
+  setGameBannerMessage('Loading the latest final game…');
   loadSpotlight().catch((error) => reportError(error));
 });
 
+function setupDebugConsole() {
+  if (!debugToggle) {
+    return;
+  }
+
+  debugToggle.addEventListener('click', () => {
+    setDebugOpen(!debugOpen);
+  });
+
+  if (debugCloseButton) {
+    debugCloseButton.addEventListener('click', () => setDebugOpen(false));
+  }
+
+  if (debugClearButton) {
+    debugClearButton.addEventListener('click', () => {
+      debugEntries.length = 0;
+      updateDebugCount();
+      renderDebugEntries();
+      debugToggle.classList.remove('debug-toggle-error');
+      logDebug('info', 'Debug log cleared.');
+    });
+  }
+
+  updateDebugCount();
+}
+
+function setDebugOpen(open) {
+  debugOpen = open;
+  if (!debugToggle || !debugPanel) {
+    return;
+  }
+
+  debugToggle.setAttribute('aria-expanded', String(open));
+  debugPanel.hidden = !open;
+
+  if (open) {
+    renderDebugEntries();
+  }
+}
+
+function renderDebugEntries() {
+  if (!debugLogList) {
+    return;
+  }
+
+  debugLogList.replaceChildren();
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  for (const entry of debugEntries.slice().reverse()) {
+    const item = document.createElement('li');
+    item.dataset.level = entry.level;
+
+    const time = document.createElement('time');
+    time.dateTime = entry.timestamp.toISOString();
+    time.textContent = formatter.format(entry.timestamp);
+    item.append(time);
+
+    const message = document.createElement('div');
+    message.textContent = entry.message;
+    item.append(message);
+
+    if (entry.details) {
+      const pre = document.createElement('pre');
+      pre.textContent = typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details, null, 2);
+      item.append(pre);
+    }
+
+    debugLogList.append(item);
+  }
+}
+
+function updateDebugCount() {
+  if (!debugCount) {
+    return;
+  }
+
+  if (debugEntries.length) {
+    debugCount.textContent = String(debugEntries.length);
+    debugCount.hidden = false;
+    debugCount.setAttribute('aria-hidden', 'false');
+  } else {
+    debugCount.textContent = '';
+    debugCount.hidden = true;
+    debugCount.setAttribute('aria-hidden', 'true');
+  }
+}
+
+function logDebug(level, message, details) {
+  debugEntryId += 1;
+  debugEntries.push({
+    id: debugEntryId,
+    level,
+    message,
+    details,
+    timestamp: new Date()
+  });
+
+  if (debugEntries.length > 250) {
+    debugEntries.splice(0, debugEntries.length - 250);
+  }
+
+  if (level === 'error' && debugToggle) {
+    debugToggle.classList.add('debug-toggle-error');
+  }
+
+  updateDebugCount();
+
+  if (debugOpen) {
+    renderDebugEntries();
+  }
+}
+
 async function loadSpotlight() {
-  statusText.textContent = 'Loading live data from ESPN…';
+  logDebug('info', 'Beginning spotlight refresh.', { season: SEASON, teamId: TEAM_ID });
+  if (statusText) {
+    statusText.textContent = 'Loading live data from ESPN…';
+  }
   showStatus(true);
 
   const latestEvent = await getLatestFinalEvent();
   if (!latestEvent) {
-    gameBanner.innerHTML = `<p class="empty">No completed games have been recorded for the 2025 season yet. Check back soon.</p>`;
-    statusText.textContent = 'No completed games available yet.';
+    logDebug('warn', 'No completed events available for the configured season.', { season: SEASON });
+    setGameBannerMessage('No completed games have been recorded for the 2025 season yet. Check back soon.');
+    setContainerMessage(offenseContainer, 'No completed game data available yet.');
+    setContainerMessage(defenseContainer, 'No completed game data available yet.');
+    if (statusText) {
+      statusText.textContent = 'No completed games available yet.';
+    }
     return;
   }
 
-  const summary = await fetchJson(`${SITE_API_BASE}/summary?event=${latestEvent.id}`);
+  logDebug('info', 'Latest final event identified.', {
+    eventId: latestEvent.id,
+    opponent: latestEvent.name,
+    date: latestEvent.date
+  });
+
+  const summary = await fetchJson(`${SITE_API_BASE}/summary?event=${latestEvent.id}`, 'event summary');
   const teamBoxscore = summary.boxscore?.players?.find((group) => group.team?.id === String(TEAM_ID));
 
   if (!teamBoxscore) {
+    logDebug('error', 'Unable to find Aggies box score in summary payload.', { eventId: latestEvent.id });
     throw new Error('Unable to locate Aggies box score data for the latest game.');
   }
 
@@ -90,22 +240,31 @@ async function loadSpotlight() {
   renderSpotlight(offenseContainer, offenseLeaders);
   renderSpotlight(defenseContainer, defenseLeaders);
 
-  statusText.textContent = 'Spotlight updated with the latest 2025 data.';
+  logDebug('info', 'Spotlight render complete.', {
+    offenseCount: offenseLeaders.length,
+    defenseCount: defenseLeaders.length
+  });
+
+  if (statusText) {
+    statusText.textContent = 'Spotlight updated with the latest 2025 data.';
+  }
   setTimeout(() => showStatus(false), 800);
 }
 
 async function getLatestFinalEvent() {
-  const schedule = await fetchJson(`${SITE_API_BASE}/teams/${TEAM_ID}/schedule?season=${SEASON}`);
+  const schedule = await fetchJson(`${SITE_API_BASE}/teams/${TEAM_ID}/schedule?season=${SEASON}`, 'team schedule');
   const finalEvents = (schedule.events || []).filter((event) => {
     const competition = event.competitions?.[0];
     return competition?.status?.type?.name === 'STATUS_FINAL';
   });
 
   if (!finalEvents.length) {
+    logDebug('warn', 'Schedule does not contain any final events.', { season: SEASON });
     return null;
   }
 
   finalEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
+  logDebug('info', 'Resolved final events from schedule.', { count: finalEvents.length });
   return finalEvents[finalEvents.length - 1];
 }
 
@@ -171,12 +330,42 @@ async function buildLeadersFromConfigs(statistics, configs) {
 
   for (const config of configs) {
     const block = statistics.find((entry) => entry.name === config.category);
-    if (!block) continue;
+    if (!block) {
+      logDebug('warn', `Statistic block missing in box score for ${config.label}.`, {
+        category: config.category
+      });
+      continue;
+    }
 
     const leader = extractLeader(block, config.columnIndex, usedIds);
-    if (!leader) continue;
+    if (!leader) {
+      logDebug('warn', `No qualifying leader found for ${config.label}.`, {
+        category: config.category,
+        columnIndex: config.columnIndex
+      });
+      continue;
+    }
 
     const playerPackage = await fetchAthletePackage(leader.athlete.id);
+    if (!playerPackage.stats) {
+      logDebug('warn', `Season statistics payload missing for ${leader.athlete.displayName}.`, {
+        athleteId: leader.athlete.id,
+        role: config.label
+      });
+    }
+
+    const headshotInfo = resolveHeadshot(leader.athlete, playerPackage.profile);
+    if (!headshotInfo.url) {
+      logDebug('warn', `No headshot available for ${leader.athlete.displayName}. Using fallback image.`, {
+        athleteId: leader.athlete.id,
+        sources: headshotInfo.sources
+      });
+    } else if (headshotInfo.source && headshotInfo.source !== 'boxscore headshot') {
+      logDebug('info', `Headshot for ${leader.athlete.displayName} loaded from ${headshotInfo.source}.`, {
+        athleteId: leader.athlete.id
+      });
+    }
+
     const seasonMetric = resolveStat(playerPackage.stats, config.seasonStat.category, config.seasonStat.stat);
     const seasonDetails = collectSeasonDetails(playerPackage.stats, SEASON_DETAIL_FIELDS[config.key] || []);
 
@@ -188,12 +377,35 @@ async function buildLeadersFromConfigs(statistics, configs) {
       seasonValue = parseStatValue(seasonDisplay);
     }
 
+    if (!seasonDisplay) {
+      logDebug('warn', `Season metric missing for ${leader.athlete.displayName}.`, {
+        athleteId: leader.athlete.id,
+        category: config.seasonStat.category,
+        stat: config.seasonStat.stat
+      });
+    }
+
+    if (!seasonDetails.length) {
+      logDebug('warn', `Detailed season splits unavailable for ${leader.athlete.displayName}.`, {
+        athleteId: leader.athlete.id,
+        role: config.label
+      });
+    }
+
     const grade = computeGrade(config.key, leader.value, seasonValue);
+
+    const profileLink = (leader.athlete.links || []).find((link) => link.rel?.includes('athlete'))?.href;
+    const normalizedProfileLink = normalizeAssetUrl(profileLink);
+    if (!normalizedProfileLink) {
+      logDebug('warn', `Profile link missing for ${leader.athlete.displayName}. Using fallback URL.`, {
+        athleteId: leader.athlete.id
+      });
+    }
 
     selected.push({
       id: leader.athlete.id,
       name: leader.athlete.displayName,
-      headshot: leader.athlete.headshot?.href,
+      headshot: headshotInfo.url,
       role: config.label,
       lastMetricLabel: block.labels?.[config.columnIndex] || 'Stat',
       lastMetricDisplay: leader.display,
@@ -202,7 +414,14 @@ async function buildLeadersFromConfigs(statistics, configs) {
       lastGameDetails: buildDetailsList(block, leader.stats),
       seasonDetails,
       grade,
-      link: (leader.athlete.links || []).find((link) => link.rel?.includes('athlete'))?.href || `https://www.espn.com/college-football/player/_/id/${leader.athlete.id}`,
+      link: normalizedProfileLink || `https://www.espn.com/college-football/player/_/id/${leader.athlete.id}`,
+      lastValue: leader.value,
+      seasonValue
+    });
+
+    logDebug('info', `${config.label} resolved.`, {
+      athleteId: leader.athlete.id,
+      name: leader.athlete.displayName,
       lastValue: leader.value,
       seasonValue
     });
@@ -247,20 +466,26 @@ function buildDetailsList(block, stats) {
 
 async function fetchAthletePackage(athleteId) {
   if (athleteCache.has(athleteId)) {
+    logDebug('info', `Using cached athlete package.`, { athleteId });
     return athleteCache.get(athleteId);
   }
 
   const profileUrl = `${CORE_API_BASE}/seasons/${SEASON}/athletes/${athleteId}?lang=en&region=us`;
-  const profile = await fetchJson(profileUrl);
+  logDebug('info', 'Fetching athlete profile.', { athleteId });
+  const profile = await fetchJson(profileUrl, `athlete ${athleteId} profile`);
   let stats = null;
 
   if (profile.statistics?.$ref) {
     const statsUrl = profile.statistics.$ref.replace('http://', 'https://');
-    stats = await fetchJson(statsUrl);
+    logDebug('info', 'Fetching athlete statistics.', { athleteId });
+    stats = await fetchJson(statsUrl, `athlete ${athleteId} statistics`);
+  } else {
+    logDebug('warn', 'Statistics reference missing from athlete profile.', { athleteId });
   }
 
   const result = { profile, stats };
   athleteCache.set(athleteId, result);
+  logDebug('info', 'Athlete package cached.', { athleteId });
   return result;
 }
 
@@ -302,6 +527,44 @@ function collectSeasonDetails(statsData, detailConfig) {
     .filter(Boolean);
 }
 
+function resolveHeadshot(athlete, profile = {}) {
+  const sources = [
+    { value: athlete?.headshot?.href, label: 'boxscore headshot' },
+    { value: profile?.headshot?.href, label: 'profile headshot' },
+    { value: profile?.athlete?.headshot?.href, label: 'profile athlete headshot' },
+    { value: profile?.team?.logos?.[0]?.href, label: 'team logo' }
+  ];
+
+  for (const source of sources) {
+    const normalized = normalizeAssetUrl(source.value);
+    if (normalized) {
+      return {
+        url: normalized,
+        source: source.label,
+        sources: sources.map((item) => item.value)
+      };
+    }
+  }
+
+  return {
+    url: '',
+    source: null,
+    sources: sources.map((item) => item.value)
+  };
+}
+
+function normalizeAssetUrl(url) {
+  if (!url) {
+    return '';
+  }
+
+  if (url.startsWith('//')) {
+    return `https:${url}`;
+  }
+
+  return url.replace(/^http:\/\//i, 'https://');
+}
+
 function computeGrade(key, lastValue, seasonValue) {
   const reference = BENCHMARKS[key] || { lastGameMax: 1, seasonMax: 1 };
   const gameRatio = Math.min(reference.lastGameMax ? lastValue / reference.lastGameMax : 0, 1);
@@ -328,14 +591,12 @@ function determineLetter(score) {
 }
 
 function renderSpotlight(container, players) {
-  container.replaceChildren();
   if (!players.length) {
-    const message = document.createElement('p');
-    message.className = 'empty';
-    message.textContent = 'No qualifying leaders available.';
-    container.append(message);
+    setContainerMessage(container, 'No qualifying leaders available.');
     return;
   }
+
+  container.replaceChildren();
 
   for (const player of players) {
     const card = cardTemplate.content.firstElementChild.cloneNode(true);
@@ -449,22 +710,111 @@ function parseStatValue(raw) {
   return numeric ? Number(numeric) : 0;
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
-  if (!response.ok) {
-    throw new Error(`Request failed (${response.status}) for ${url}`);
+async function fetchJson(url, label) {
+  const context = label || url;
+  const baseOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
+  const canMeasurePerformance = typeof performance !== 'undefined' && typeof performance.now === 'function';
+  let lastError;
+
+  for (let attempt = 1; attempt <= FETCH_RETRY_LIMIT; attempt += 1) {
+    const start = canMeasurePerformance ? performance.now() : Date.now();
+    const requestUrl = new URL(PROXY_ENDPOINT, baseOrigin);
+    requestUrl.searchParams.set('url', url);
+
+    const finalUrl = requestUrl.toString();
+    logDebug('info', `Fetching ${context}.`, { url: finalUrl, attempt });
+
+    let controller;
+    let timeoutId;
+    if (typeof AbortController === 'function') {
+      controller = new AbortController();
+      timeoutId = setTimeout(() => {
+        controller.abort();
+      }, FETCH_TIMEOUT_MS);
+    }
+
+    let response;
+    try {
+      response = await fetch(finalUrl, {
+        headers: { Accept: 'application/json' },
+        signal: controller?.signal
+      });
+    } catch (networkError) {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      const duration = (canMeasurePerformance ? performance.now() : Date.now()) - start;
+      const isAbortError = networkError?.name === 'AbortError';
+      logDebug('error', isAbortError ? `Request timed out for ${context}.` : `Network error while fetching ${context}.`, {
+        url: finalUrl,
+        attempt,
+        durationMs: Math.round(duration),
+        message: networkError?.message
+      });
+      lastError = networkError;
+      throw networkError;
+    }
+
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+
+    const end = canMeasurePerformance ? performance.now() : Date.now();
+    const duration = end - start;
+
+    if (!response.ok) {
+      logDebug('error', `Request failed (${response.status}) for ${context}.`, {
+        url: finalUrl,
+        status: response.status,
+        attempt
+      });
+      lastError = new Error(`Request failed (${response.status}) for ${finalUrl}`);
+      throw lastError;
+    }
+
+    const data = await response.json();
+    logDebug('info', `Fetched ${context}.`, {
+      url: finalUrl,
+      status: response.status,
+      durationMs: Math.round(duration),
+      attempt
+    });
+    return data;
   }
-  return response.json();
+
+  throw lastError || new Error(`Unable to fetch ${context}`);
 }
 
 function showStatus(visible) {
+  if (!statusBanner) return;
   statusBanner.classList.toggle('hidden', !visible);
 }
 
 function reportError(error) {
   console.error(error);
-  statusText.textContent = 'Unable to load spotlight data. Please try again later.';
+  logDebug('error', 'Spotlight error encountered.', {
+    message: error?.message,
+    stack: error?.stack
+  });
+  if (statusText) {
+    statusText.textContent = 'Unable to load spotlight data. Please try again later.';
+  }
   showStatus(true);
-  offenseContainer.innerHTML = '<p class="empty">Data unavailable.</p>';
-  defenseContainer.innerHTML = '<p class="empty">Data unavailable.</p>';
+  setContainerMessage(offenseContainer, 'Data unavailable.');
+  setContainerMessage(defenseContainer, 'Data unavailable.');
+  setGameBannerMessage('Game details unavailable.');
+}
+
+function setContainerMessage(container, message) {
+  if (!container) return;
+  container.replaceChildren();
+  const paragraph = document.createElement('p');
+  paragraph.className = 'empty';
+  paragraph.textContent = message;
+  container.append(paragraph);
+}
+
+function setGameBannerMessage(message) {
+  if (!gameBanner) return;
+  gameBanner.innerHTML = `<p class="empty">${message}</p>`;
 }
