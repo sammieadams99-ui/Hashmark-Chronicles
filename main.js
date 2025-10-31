@@ -16,10 +16,6 @@ const debugCount = document.getElementById('debug-count');
 const debugClearButton = document.getElementById('debug-clear');
 const debugCloseButton = document.getElementById('debug-close');
 
-const FETCH_RETRY_LIMIT = 3;
-const FETCH_RETRY_BASE_DELAY_MS = 750;
-const FETCH_TIMEOUT_MS = 10000;
-
 const BENCHMARKS = {
   passing: { lastGameMax: 400, seasonMax: 3500 },
   rushing: { lastGameMax: 220, seasonMax: 1800 },
@@ -702,117 +698,39 @@ function parseStatValue(raw) {
 }
 
 async function fetchJson(url, label) {
+  const start = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   const context = label || url;
-  const baseOrigin = typeof window !== 'undefined' ? window.location.origin : undefined;
-  const canMeasurePerformance = typeof performance !== 'undefined' && typeof performance.now === 'function';
-  let lastError;
+  logDebug('info', `Fetching ${context}.`, { url });
 
-  for (let attempt = 1; attempt <= FETCH_RETRY_LIMIT; attempt += 1) {
-    const start = canMeasurePerformance ? performance.now() : Date.now();
-    const requestUrl = new URL(url, baseOrigin);
-    // ESPN blocks requests that include a Cache-Control header from the browser.
-    // Instead of relying on the Fetch API cache directive (which adds the header
-    // implicitly and triggers a CORS preflight), append a cache-busting query
-    // parameter so that we still bypass intermediate caches without violating the
-    // simple request rules.
-    requestUrl.searchParams.set('_', `${Date.now().toString(36)}${attempt.toString(36)}`);
-
-    const finalUrl = requestUrl.toString();
-    logDebug('info', `Fetching ${context}.`, { url: finalUrl, attempt });
-
-    let controller;
-    let timeoutId;
-    if (typeof AbortController === 'function') {
-      controller = new AbortController();
-      timeoutId = setTimeout(() => {
-        controller.abort();
-      }, FETCH_TIMEOUT_MS);
-    }
-
-    let response;
-    try {
-      response = await fetch(finalUrl, {
-        mode: 'cors',
-        credentials: 'omit',
-        signal: controller?.signal
-      });
-    } catch (networkError) {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      const duration = (canMeasurePerformance ? performance.now() : Date.now()) - start;
-      const isAbortError = networkError?.name === 'AbortError';
-      logDebug('error', isAbortError ? `Request timed out for ${context}.` : `Network error while fetching ${context}.`, {
-        url: finalUrl,
-        attempt,
-        durationMs: Math.round(duration),
-        message: networkError?.message
-      });
-      lastError = networkError;
-      if (attempt < FETCH_RETRY_LIMIT) {
-        const delay = getRetryDelay(attempt);
-        logDebug('info', `Retrying ${context} after transient failure.`, {
-          url: finalUrl,
-          nextAttempt: attempt + 1,
-          delayMs: delay
-        });
-        await wait(delay);
-        continue;
-      }
-      throw networkError;
-    }
-
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-
-    const end = canMeasurePerformance ? performance.now() : Date.now();
-    const duration = end - start;
-
-    if (!response.ok) {
-      const retryable = response.status >= 500 || response.status === 429;
-      logDebug('error', `Request failed (${response.status}) for ${context}.`, {
-        url: finalUrl,
-        status: response.status,
-        attempt
-      });
-      lastError = new Error(`Request failed (${response.status}) for ${finalUrl}`);
-      if (retryable && attempt < FETCH_RETRY_LIMIT) {
-        const delay = getRetryDelay(attempt);
-        logDebug('info', `Retrying ${context} after server error.`, {
-          url: finalUrl,
-          status: response.status,
-          nextAttempt: attempt + 1,
-          delayMs: delay
-        });
-        await wait(delay);
-        continue;
-      }
-      throw lastError;
-    }
-
-    const data = await response.json();
-    logDebug('info', `Fetched ${context}.`, {
-      url: finalUrl,
-      status: response.status,
-      durationMs: Math.round(duration),
-      attempt
+  let response;
+  try {
+    response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
+  } catch (networkError) {
+    logDebug('error', `Network error while fetching ${context}.`, {
+      url,
+      message: networkError?.message
     });
-    return data;
+    throw networkError;
   }
 
-  throw lastError || new Error(`Unable to fetch ${context}`);
-}
+  const end = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const duration = end - start;
 
-function getRetryDelay(attempt) {
-  const exponent = attempt - 1;
-  return FETCH_RETRY_BASE_DELAY_MS * Math.pow(2, exponent);
-}
+  if (!response.ok) {
+    logDebug('error', `Request failed (${response.status}) for ${context}.`, {
+      url,
+      status: response.status
+    });
+    throw new Error(`Request failed (${response.status}) for ${url}`);
+  }
 
-function wait(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
+  const data = await response.json();
+  logDebug('info', `Fetched ${context}.`, {
+    url,
+    status: response.status,
+    durationMs: Math.round(duration)
   });
+  return data;
 }
 
 function showStatus(visible) {
