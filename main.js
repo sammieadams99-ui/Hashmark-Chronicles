@@ -700,24 +700,14 @@ function parseStatValue(raw) {
 async function fetchJson(url, label) {
   const start = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   const context = label || url;
-  const baseOrigin = typeof window !== 'undefined' ? window.location.origin : undefined;
-  const requestUrl = new URL(url, baseOrigin);
-  // ESPN blocks requests that include a Cache-Control header from the browser.
-  // Instead of relying on the Fetch API cache directive (which adds the header
-  // implicitly and triggers a CORS preflight), append a cache-busting query
-  // parameter so that we still bypass intermediate caches without violating the
-  // simple request rules.
-  requestUrl.searchParams.set('_', Date.now().toString(36));
-
-  const finalUrl = requestUrl.toString();
-  logDebug('info', `Fetching ${context}.`, { url: finalUrl });
+  logDebug('info', `Fetching ${context}.`, { url });
 
   let response;
   try {
-    response = await fetch(finalUrl, { mode: 'cors', credentials: 'omit' });
+    response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
   } catch (networkError) {
     logDebug('error', `Network error while fetching ${context}.`, {
-      url: finalUrl,
+      url,
       message: networkError?.message
     });
     throw networkError;
@@ -728,15 +718,15 @@ async function fetchJson(url, label) {
 
   if (!response.ok) {
     logDebug('error', `Request failed (${response.status}) for ${context}.`, {
-      url: finalUrl,
+      url,
       status: response.status
     });
-    throw new Error(`Request failed (${response.status}) for ${finalUrl}`);
+    throw new Error(`Request failed (${response.status}) for ${url}`);
   }
 
   const data = await response.json();
   logDebug('info', `Fetched ${context}.`, {
-    url: finalUrl,
+    url,
     status: response.status,
     durationMs: Math.round(duration)
   });
