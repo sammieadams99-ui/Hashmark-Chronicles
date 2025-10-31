@@ -704,10 +704,7 @@ async function fetchJson(url, label) {
 
   let response;
   try {
-    // Rely on the Fetch API's cache directive to avoid revalidation headers that
-    // would trigger a CORS-preflight (ESPN does not allow Cache-Control in
-    // custom request headers from the browser).
-    response = await fetch(url, { cache: 'no-store' });
+    response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
   } catch (networkError) {
     logDebug('error', `Network error while fetching ${context}.`, {
       url,
