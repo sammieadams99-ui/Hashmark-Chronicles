@@ -4,7 +4,7 @@ const SITE_API_BASE = 'https://site.api.espn.com/apis/site/v2/sports/football/co
 const CORE_API_BASE = 'https://sports.core.api.espn.com/v2/sports/football/leagues/college-football';
 
 const statusBanner = document.getElementById('status');
-const statusText = statusBanner.querySelector('.status-text');
+const statusText = statusBanner ? statusBanner.querySelector('.status-text') : null;
 const offenseContainer = document.getElementById('offense-spotlight');
 const defenseContainer = document.getElementById('defense-spotlight');
 const cardTemplate = document.getElementById('player-card-template');
@@ -576,14 +576,12 @@ function determineLetter(score) {
 }
 
 function renderSpotlight(container, players) {
-  container.replaceChildren();
   if (!players.length) {
-    const message = document.createElement('p');
-    message.className = 'empty';
-    message.textContent = 'No qualifying leaders available.';
-    container.append(message);
+    setContainerMessage(container, 'No qualifying leaders available.');
     return;
   }
+
+  container.replaceChildren();
 
   for (const player of players) {
     const card = cardTemplate.content.firstElementChild.cloneNode(true);
@@ -734,6 +732,7 @@ async function fetchJson(url, label) {
 }
 
 function showStatus(visible) {
+  if (!statusBanner) return;
   statusBanner.classList.toggle('hidden', !visible);
 }
 
@@ -745,6 +744,21 @@ function reportError(error) {
   });
   statusText.textContent = 'Unable to load spotlight data. Please try again later.';
   showStatus(true);
-  offenseContainer.innerHTML = '<p class="empty">Data unavailable.</p>';
-  defenseContainer.innerHTML = '<p class="empty">Data unavailable.</p>';
+  setContainerMessage(offenseContainer, 'Data unavailable.');
+  setContainerMessage(defenseContainer, 'Data unavailable.');
+  setGameBannerMessage('Game details unavailable.');
+}
+
+function setContainerMessage(container, message) {
+  if (!container) return;
+  container.replaceChildren();
+  const paragraph = document.createElement('p');
+  paragraph.className = 'empty';
+  paragraph.textContent = message;
+  container.append(paragraph);
+}
+
+function setGameBannerMessage(message) {
+  if (!gameBanner) return;
+  gameBanner.innerHTML = `<p class="empty">${message}</p>`;
 }
