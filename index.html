@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NMSU Aggies Player Spotlight</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="page-header">
+      <div class="branding">
+        <img src="https://upload.wikimedia.org/wikipedia/en/1/18/New_Mexico_State_Aggies_logo.svg" alt="New Mexico State Aggies logo" class="logo" />
+        <div>
+          <h1>New Mexico State Aggies Spotlight</h1>
+          <p class="subtitle">2025 Offensive &amp; Defensive Leaders</p>
+        </div>
+      </div>
+      <div id="game-banner" class="game-banner" aria-live="polite"></div>
+    </header>
+
+    <main>
+      <section aria-labelledby="offense-title">
+        <header class="section-header">
+          <h2 id="offense-title">Offensive Leaders</h2>
+          <p class="section-subtitle">Top performers from the latest 2025 contest and their season pace.</p>
+        </header>
+        <div id="offense-spotlight" class="spotlight-grid" role="list"></div>
+      </section>
+
+      <section aria-labelledby="defense-title">
+        <header class="section-header">
+          <h2 id="defense-title">Defensive Leaders</h2>
+          <p class="section-subtitle">Disruptors driving the Aggies' defense in 2025.</p>
+        </header>
+        <div id="defense-spotlight" class="spotlight-grid" role="list"></div>
+      </section>
+    </main>
+
+    <div id="status" class="status" role="status" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <span class="status-text">Loading live data from ESPN…</span>
+    </div>
+
+    <template id="player-card-template">
+      <article class="player-card" role="listitem" tabindex="0">
+        <div class="card-front">
+          <div class="card-identity">
+            <img class="card-headshot" alt="" />
+            <div class="card-summary">
+              <p class="card-role"></p>
+              <h3 class="card-name"></h3>
+              <p class="card-grade" aria-live="polite"></p>
+            </div>
+          </div>
+          <dl class="card-metric">
+            <div>
+              <dt>Last Game</dt>
+              <dd class="metric-last"></dd>
+            </div>
+            <div>
+              <dt>Season Pace</dt>
+              <dd class="metric-season"></dd>
+            </div>
+          </dl>
+          <button type="button" class="card-toggle" aria-expanded="false">Show full breakdown</button>
+        </div>
+        <div class="card-details" hidden>
+          <div class="card-details-section">
+            <h4>Last Game Stat Line</h4>
+            <ul class="card-list card-last-list"></ul>
+          </div>
+          <div class="card-details-section">
+            <h4>2025 Season Snapshot</h4>
+            <ul class="card-list card-season-list"></ul>
+          </div>
+          <a class="card-link" target="_blank" rel="noopener noreferrer">View full ESPN profile</a>
+        </div>
+      </article>
+    </template>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
