@@ -205,6 +205,9 @@ async function loadSpotlight() {
     statusText.textContent = 'No completed games available yet.';
     return;
   }
+  showStatus(true);
+  startPersistentLoad().catch((error) => reportError(error));
+});
 
   logDebug('info', 'Latest final event identified.', {
     eventId: latestEvent.id,
@@ -219,14 +222,16 @@ async function loadSpotlight() {
     logDebug('error', 'Unable to find Aggies box score in summary payload.', { eventId: latestEvent.id });
     throw new Error('Unable to locate Aggies box score data for the latest game.');
   }
+}
 
   renderGameBanner(seasonContext.event, summary);
 
   const offenseLeaders = await buildOffenseLeaders(teamBoxscore.statistics || [], activeSeason);
   const defenseLeaders = await buildDefenseLeaders(teamBoxscore.statistics || [], activeSeason);
 
-  renderSpotlight(offenseContainer, offenseLeaders);
-  renderSpotlight(defenseContainer, defenseLeaders);
+    const seasonBlock = scheduleData.teamSchedule[0];
+    const postGames = Array.isArray(seasonBlock?.events?.post) ? seasonBlock.events.post : [];
+    const preGames = Array.isArray(seasonBlock?.events?.pre) ? seasonBlock.events.pre : [];
 
   logDebug('info', 'Spotlight render complete.', {
     offenseCount: offenseLeaders.length,
@@ -305,7 +310,6 @@ async function buildDefenseLeaders(statistics, season) {
       columnIndex: 4,
       seasonStat: { category: 'defensive', stat: 'passesDefended', label: 'Passes Defended' }
     }
-  ];
 
   return buildLeadersFromConfigs(statistics, configs, season);
 }
@@ -412,42 +416,45 @@ async function buildLeadersFromConfigs(statistics, configs, season) {
       seasonValue
     });
   }
-
-  return selected;
 }
 
-function extractLeader(block, columnIndex, usedIds) {
-  const athletes = (block.athletes || [])
-    .map((entry) => {
-      const value = parseStatValue(entry.stats?.[columnIndex]);
-      return {
-        athlete: entry.athlete,
-        stats: entry.stats || [],
-        value,
-        display: entry.stats?.[columnIndex] ?? '--'
-      };
-    })
-    .filter((entry) => !Number.isNaN(entry.value));
-
-  athletes.sort((a, b) => b.value - a.value);
-
-  const leader = athletes.find((entry) => !usedIds.has(entry.athlete.id) && entry.value > 0) || athletes.find((entry) => !usedIds.has(entry.athlete.id));
-  if (!leader) {
-    return null;
+function extractFittPayload(html) {
+  const marker = "window['__espnfitt__']";
+  const markerIndex = html.indexOf(marker);
+  if (markerIndex === -1) {
+    throw new Error('Unable to locate ESPN FITT payload.');
   }
 
-  usedIds.add(leader.athlete.id);
-  return leader;
+  let start = html.indexOf('{', markerIndex);
+  if (start === -1) {
+    throw new Error('Malformed FITT payload: missing opening brace.');
+  }
+
+  let depth = 0;
+  for (let index = start; index < html.length; index += 1) {
+    const char = html[index];
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const end = index + 1;
+        const jsonText = html.slice(start, end);
+        return JSON.parse(jsonText);
+      }
+    }
+  }
+
+  throw new Error('Malformed FITT payload: missing closing brace.');
 }
 
-function buildDetailsList(block, stats) {
-  if (!Array.isArray(block.labels) || !Array.isArray(stats)) {
-    return [];
-  }
+function renderSpotlight(scheduleData, statsData) {
+  activeSeason = scheduleData?.season || statsData?.season || TARGET_SEASON;
+  updateSeasonCopy(activeSeason);
 
-  return block.labels
-    .map((label, index) => ({ label, value: stats[index] }))
-    .filter((item) => item.value !== undefined && item.value !== null && item.value !== '');
+  renderGameBanner(scheduleData);
+  renderLeaders(offenseContainer, statsData, OFFENSE_TYPES, scheduleData?.record);
+  renderLeaders(defenseContainer, statsData, DEFENSE_TYPES, scheduleData?.record);
 }
 
 async function fetchAthletePackage(athleteId) {
@@ -475,39 +482,42 @@ async function fetchAthletePackage(athleteId) {
   return result;
 }
 
-function resolveStat(statsData, categoryName, statName) {
-  if (!statsData?.splits?.categories) {
-    return null;
+  if (scheduleData.lastFinal?.date) {
+    chunks.push(dateFormatter.format(new Date(scheduleData.lastFinal.date)));
   }
 
-  const category = statsData.splits.categories.find((entry) => entry.name === categoryName);
-  if (!category) {
-    return null;
+  if (scheduleData.record) {
+    chunks.push(`Record: ${scheduleData.record}`);
   }
 
-  const stat = category.stats?.find((entry) => entry.name === statName);
-  if (!stat) {
-    return null;
+  if (scheduleData.nextGame) {
+    const opponent = scheduleData.nextGame.opponent?.displayName ?? 'TBD';
+    chunks.push(`Next: ${opponent}`);
   }
 
-  return {
-    value: typeof stat.value === 'number' ? stat.value : Number(stat.value || 0),
-    displayValue: stat.displayValue ?? String(stat.value ?? '0')
-  };
+  const content = chunks.filter(Boolean).join(' • ');
+  gameBanner.replaceChildren();
+  const paragraph = document.createElement('p');
+  paragraph.textContent = content;
+  gameBanner.append(paragraph);
 }
 
-function collectSeasonDetails(statsData, detailConfig) {
-  if (!statsData?.splits?.categories) {
-    return [];
+function renderLeaders(container, statsData, desiredTypes, record) {
+  if (!container) {
+    return;
   }
 
-  return detailConfig
-    .map((item) => {
-      const stat = resolveStat(statsData, item.category, item.stat);
-      if (!stat) return null;
+  const leaders = desiredTypes
+    .map((descriptor) => {
+      const match = statsData.leaders.find((leader) => leader.type === descriptor.type);
+      if (!match) {
+        return null;
+      }
       return {
-        label: item.label,
-        display: stat.displayValue ?? String(stat.value ?? '0')
+        heading: descriptor.heading,
+        label: match.label,
+        value: match.value,
+        athlete: match.athlete
       };
     })
     .filter(Boolean);
@@ -586,15 +596,15 @@ function renderSpotlight(container, players) {
 
   for (const player of players) {
     const card = cardTemplate.content.firstElementChild.cloneNode(true);
-    populateCard(card, player);
+    populateLeaderCard(card, leader, record);
     container.append(card);
-  }
+  });
 }
 
-function populateCard(card, player) {
+function populateLeaderCard(card, leader, record) {
   const headshot = card.querySelector('.card-headshot');
-  headshot.src = player.headshot || 'https://a.espncdn.com/i/teamlogos/ncaa/500/166.png';
-  headshot.alt = `${player.name} headshot`;
+  headshot.src = normalizeAssetUrl(leader.athlete?.headshot) || 'https://a.espncdn.com/i/teamlogos/ncaa/500/166.png';
+  headshot.alt = `${leader.athlete?.name || leader.heading} headshot`;
 
   const seasonHeading = card.querySelector('.card-season-heading');
   if (seasonHeading) {
@@ -608,24 +618,40 @@ function populateCard(card, player) {
   card.querySelector('.card-grade').textContent = `${player.grade.letter} · ${player.grade.score}%`;
 
   const lastList = card.querySelector('.card-last-list');
-  player.lastGameDetails.forEach((detail) => {
-    const item = document.createElement('li');
-    item.innerHTML = `<span>${detail.label}</span><span>${detail.value}</span>`;
-    lastList.append(item);
-  });
+  lastList.replaceChildren(createDetailItem('Athlete', leader.athlete?.name ?? 'Unknown'));
+  lastList.append(createDetailItem('Stat type', leader.label));
 
   const seasonList = card.querySelector('.card-season-list');
-  player.seasonDetails.forEach((detail) => {
-    const item = document.createElement('li');
-    item.innerHTML = `<span>${detail.label}</span><span>${detail.display}</span>`;
-    seasonList.append(item);
-  });
+  seasonList.replaceChildren(createDetailItem('Season total', leader.value));
+  seasonList.append(createDetailItem('Updated', RECENT_UPDATE_FORMATTER.format(new Date())));
 
   const link = card.querySelector('.card-link');
-  link.href = player.link;
-  link.textContent = `View ${player.name} on ESPN`;
+  link.href = leader.athlete?.href ? normalizeAssetUrl(leader.athlete.href) : STATS_PAGE_URL;
+  link.textContent = `View ${leader.athlete?.name || 'Aggies'} on ESPN`;
 
   setupCardInteractions(card);
+}
+
+function createDetailItem(label, value) {
+  const item = document.createElement('li');
+  item.innerHTML = `<span>${label}</span><span>${value}</span>`;
+  return item;
+}
+
+function normalizeAssetUrl(url) {
+  if (!url) {
+    return '';
+  }
+  if (url.startsWith('//')) {
+    return `https:${url}`;
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    if (url.startsWith('/')) {
+      return `https://www.espn.com${url}`;
+    }
+    return `https://www.espn.com/${url.replace(/^\/+/, '')}`;
+  }
+  return url.replace(/^http:\/\//i, 'https://');
 }
 
 function setupCardInteractions(card) {
@@ -635,7 +661,7 @@ function setupCardInteractions(card) {
   function setExpanded(expanded) {
     toggle.setAttribute('aria-expanded', String(expanded));
     details.hidden = !expanded;
-    toggle.textContent = expanded ? 'Hide breakdown' : 'Show full breakdown';
+    toggle.textContent = expanded ? 'Hide ESPN details' : 'Show ESPN details';
   }
 
   toggle.addEventListener('click', (event) => {
@@ -661,44 +687,98 @@ function setupCardInteractions(card) {
   });
 }
 
-function renderGameBanner(event, summary) {
-  const competition = event.competitions?.[0];
-  if (!competition) return;
-
-  const teamSide = competition.competitors.find((competitor) => competitor.team?.id === String(TEAM_ID));
-  const opponentSide = competition.competitors.find((competitor) => competitor.team?.id !== String(TEAM_ID));
-  if (!teamSide || !opponentSide) return;
-
-  const opponentName = opponentSide.team?.displayName ?? 'Opponent';
-  const opponentRank = opponentSide.rank ? `No. ${opponentSide.rank} ` : '';
-  const date = new Date(event.date);
-  const formatter = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  const outcome = teamSide.winner ? 'Win' : 'Loss';
-  const resultLabel = `${outcome} ${teamSide.score}-${opponentSide.score} vs ${opponentRank}${opponentName}`;
-
-  const venue = competition.venue?.fullName ? `${competition.venue.fullName} (${competition.venue.address?.city || ''})` : '';
-  const attendance = summary.boxscore?.attendance ? `Attendance: ${summary.boxscore.attendance.toLocaleString()}` : '';
-
-  const meta = [formatter.format(date), venue, attendance].filter(Boolean).join(' · ');
-
-  gameBanner.innerHTML = `
-    <h2>${resultLabel}</h2>
-    <div class="game-meta">${meta}</div>
-  `;
+function updateSeasonCopy(season) {
+  if (seasonSubtitle) {
+    seasonSubtitle.textContent = `${season} Aggies Leaders`;
+  }
+  if (offenseSubtitle) {
+    offenseSubtitle.textContent = `Season leaders pulled directly from ESPN (${season}).`;
+  }
+  if (defenseSubtitle) {
+    defenseSubtitle.textContent = `Defensive impact players from ESPN (${season}).`;
+  }
+  if (seasonNote) {
+    seasonNote.textContent = '';
+    seasonNote.hidden = true;
+    seasonNote.setAttribute('aria-hidden', 'true');
+  }
 }
 
-function parseStatValue(raw) {
-  if (typeof raw === 'number') {
-    return raw;
+function setupDebugConsole() {
+  if (!debugToggle) {
+    return;
   }
-  if (typeof raw !== 'string') {
-    return 0;
+
+  debugToggle.addEventListener('click', () => {
+    setDebugOpen(!debugOpen);
+  });
+
+  if (debugCloseButton) {
+    debugCloseButton.addEventListener('click', () => setDebugOpen(false));
   }
-  if (raw === '--') {
-    return 0;
+
+  if (debugClearButton) {
+    debugClearButton.addEventListener('click', () => {
+      debugEntries.length = 0;
+      updateDebugCount();
+      renderDebugEntries();
+      debugToggle.classList.remove('debug-toggle-error');
+      logDebug('info', 'Debug log cleared.');
+    });
   }
-  const numeric = raw.replace(/[^0-9.\-]/g, '');
-  return numeric ? Number(numeric) : 0;
+
+  updateDebugCount();
+  updateDebugSummary(lastRequestSummary);
+}
+
+function setDebugOpen(open) {
+  debugOpen = open;
+  if (!debugToggle || !debugPanel) {
+    return;
+  }
+
+  debugToggle.setAttribute('aria-expanded', String(open));
+  debugPanel.hidden = !open;
+
+  if (open) {
+    renderDebugEntries();
+  }
+}
+
+function renderDebugEntries() {
+  if (!debugLogList) {
+    return;
+  }
+
+  debugLogList.replaceChildren();
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+
+  for (const entry of debugEntries.slice().reverse()) {
+    const item = document.createElement('li');
+    item.dataset.level = entry.level;
+
+    const time = document.createElement('time');
+    time.dateTime = entry.timestamp.toISOString();
+    time.textContent = formatter.format(entry.timestamp);
+    item.append(time);
+
+    const message = document.createElement('div');
+    message.textContent = entry.message;
+    item.append(message);
+
+    if (entry.details) {
+      const pre = document.createElement('pre');
+      pre.textContent = typeof entry.details === 'string' ? entry.details : JSON.stringify(entry.details, null, 2);
+      item.append(pre);
+    }
+
+    debugLogList.append(item);
+  }
 }
 
 async function fetchJson(url, label) {
