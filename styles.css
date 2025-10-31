@@ -48,6 +48,14 @@ body {
   font-weight: 500;
 }
 
+.season-note {
+  margin: 0.35rem 0 0;
+  color: var(--accent-dark);
+  font-weight: 600;
+  font-size: 0.95rem;
+  min-height: 1.1em;
+}
+
 .game-banner {
   padding: 1.25rem;
   border-radius: 1rem;

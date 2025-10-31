@@ -1,5 +1,6 @@
 const TEAM_ID = 166;
-const SEASON = 2025;
+const TARGET_SEASON = 2025;
+const FALLBACK_SEASONS = [TARGET_SEASON - 1];
 const SITE_API_BASE = 'https://site.api.espn.com/apis/site/v2/sports/football/college-football';
 const CORE_API_BASE = 'https://sports.core.api.espn.com/v2/sports/football/leagues/college-football';
 
@@ -219,10 +220,10 @@ async function loadSpotlight() {
     throw new Error('Unable to locate Aggies box score data for the latest game.');
   }
 
-  renderGameBanner(latestEvent, summary);
+  renderGameBanner(seasonContext.event, summary);
 
-  const offenseLeaders = await buildOffenseLeaders(teamBoxscore.statistics || []);
-  const defenseLeaders = await buildDefenseLeaders(teamBoxscore.statistics || []);
+  const offenseLeaders = await buildOffenseLeaders(teamBoxscore.statistics || [], activeSeason);
+  const defenseLeaders = await buildDefenseLeaders(teamBoxscore.statistics || [], activeSeason);
 
   renderSpotlight(offenseContainer, offenseLeaders);
   renderSpotlight(defenseContainer, defenseLeaders);
@@ -253,7 +254,7 @@ async function getLatestFinalEvent() {
   return finalEvents[finalEvents.length - 1];
 }
 
-async function buildOffenseLeaders(statistics) {
+async function buildOffenseLeaders(statistics, season) {
   const configs = [
     {
       key: 'passing',
@@ -278,10 +279,10 @@ async function buildOffenseLeaders(statistics) {
     }
   ];
 
-  return buildLeadersFromConfigs(statistics, configs);
+  return buildLeadersFromConfigs(statistics, configs, season);
 }
 
-async function buildDefenseLeaders(statistics) {
+async function buildDefenseLeaders(statistics, season) {
   const configs = [
     {
       key: 'tackles',
@@ -306,10 +307,10 @@ async function buildDefenseLeaders(statistics) {
     }
   ];
 
-  return buildLeadersFromConfigs(statistics, configs);
+  return buildLeadersFromConfigs(statistics, configs, season);
 }
 
-async function buildLeadersFromConfigs(statistics, configs) {
+async function buildLeadersFromConfigs(statistics, configs, season) {
   const selected = [];
   const usedIds = new Set();
 
@@ -594,6 +595,11 @@ function populateCard(card, player) {
   const headshot = card.querySelector('.card-headshot');
   headshot.src = player.headshot || 'https://a.espncdn.com/i/teamlogos/ncaa/500/166.png';
   headshot.alt = `${player.name} headshot`;
+
+  const seasonHeading = card.querySelector('.card-season-heading');
+  if (seasonHeading) {
+    seasonHeading.textContent = `${activeSeason} Season Snapshot`;
+  }
 
   card.querySelector('.card-role').textContent = player.role;
   card.querySelector('.card-name').textContent = player.name;
