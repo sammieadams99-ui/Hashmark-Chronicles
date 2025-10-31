@@ -58,7 +58,7 @@ const SEASON_DETAIL_FIELDS = {
   ]
 };
 
-const seasonStatsCache = new Map();
+const athleteCache = new Map();
 
 document.addEventListener('DOMContentLoaded', () => {
   loadSpotlight().catch((error) => reportError(error));
@@ -72,9 +72,6 @@ async function loadSpotlight() {
   if (!latestEvent) {
     gameBanner.innerHTML = `<p class="empty">No completed games have been recorded for the 2025 season yet. Check back soon.</p>`;
     statusText.textContent = 'No completed games available yet.';
-    offenseContainer.innerHTML = '<p class="empty">2025 game stats will appear once the Aggies finish a contest.</p>';
-    defenseContainer.innerHTML = '<p class="empty">Defensive standouts will populate after the first 2025 game concludes.</p>';
-    setTimeout(() => showStatus(false), 800);
     return;
   }
 
@@ -179,9 +176,9 @@ async function buildLeadersFromConfigs(statistics, configs) {
     const leader = extractLeader(block, config.columnIndex, usedIds);
     if (!leader) continue;
 
-    const statsData = await fetchSeasonStats(leader.athlete.id);
-    const seasonMetric = resolveStat(statsData, config.seasonStat.category, config.seasonStat.stat);
-    const seasonDetails = collectSeasonDetails(statsData, SEASON_DETAIL_FIELDS[config.key] || []);
+    const playerPackage = await fetchAthletePackage(leader.athlete.id);
+    const seasonMetric = resolveStat(playerPackage.stats, config.seasonStat.category, config.seasonStat.stat);
+    const seasonDetails = collectSeasonDetails(playerPackage.stats, SEASON_DETAIL_FIELDS[config.key] || []);
 
     let seasonValue = seasonMetric?.value ?? 0;
     let seasonDisplay = seasonMetric?.displayValue || seasonMetric?.display || '';
@@ -248,22 +245,23 @@ function buildDetailsList(block, stats) {
     .filter((item) => item.value !== undefined && item.value !== null && item.value !== '');
 }
 
-async function fetchSeasonStats(athleteId) {
-  if (seasonStatsCache.has(athleteId)) {
-    return seasonStatsCache.get(athleteId);
+async function fetchAthletePackage(athleteId) {
+  if (athleteCache.has(athleteId)) {
+    return athleteCache.get(athleteId);
   }
 
-  const url = `${CORE_API_BASE}/seasons/${SEASON}/types/2/teams/${TEAM_ID}/athletes/${athleteId}/statistics/0?lang=en&region=us`;
+  const profileUrl = `${CORE_API_BASE}/seasons/${SEASON}/athletes/${athleteId}?lang=en&region=us`;
+  const profile = await fetchJson(profileUrl);
+  let stats = null;
 
-  try {
-    const stats = await fetchJson(url);
-    seasonStatsCache.set(athleteId, stats);
-    return stats;
-  } catch (error) {
-    console.warn(`Unable to load season stats for athlete ${athleteId}`, error);
-    seasonStatsCache.set(athleteId, null);
-    return null;
+  if (profile.statistics?.$ref) {
+    const statsUrl = profile.statistics.$ref.replace('http://', 'https://');
+    stats = await fetchJson(statsUrl);
   }
+
+  const result = { profile, stats };
+  athleteCache.set(athleteId, result);
+  return result;
 }
 
 function resolveStat(statsData, categoryName, statName) {
