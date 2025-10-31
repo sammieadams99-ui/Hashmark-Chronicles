@@ -16,10 +16,6 @@ const debugCount = document.getElementById('debug-count');
 const debugClearButton = document.getElementById('debug-clear');
 const debugCloseButton = document.getElementById('debug-close');
 
-const PROXY_ENDPOINT = '/api/espn';
-const FETCH_RETRY_LIMIT = 1;
-const FETCH_TIMEOUT_MS = 9000;
-
 const BENCHMARKS = {
   passing: { lastGameMax: 400, seasonMax: 3500 },
   rushing: { lastGameMax: 220, seasonMax: 1800 },
@@ -76,9 +72,6 @@ let debugEntryId = 0;
 document.addEventListener('DOMContentLoaded', () => {
   setupDebugConsole();
   logDebug('info', 'Debug console initialised.');
-  setContainerMessage(offenseContainer, 'Loading leaders…');
-  setContainerMessage(defenseContainer, 'Loading leaders…');
-  setGameBannerMessage('Loading the latest final game…');
   loadSpotlight().catch((error) => reportError(error));
 });
 
@@ -201,20 +194,14 @@ function logDebug(level, message, details) {
 
 async function loadSpotlight() {
   logDebug('info', 'Beginning spotlight refresh.', { season: SEASON, teamId: TEAM_ID });
-  if (statusText) {
-    statusText.textContent = 'Loading live data from ESPN…';
-  }
+  statusText.textContent = 'Loading live data from ESPN…';
   showStatus(true);
 
   const latestEvent = await getLatestFinalEvent();
   if (!latestEvent) {
     logDebug('warn', 'No completed events available for the configured season.', { season: SEASON });
-    setGameBannerMessage('No completed games have been recorded for the 2025 season yet. Check back soon.');
-    setContainerMessage(offenseContainer, 'No completed game data available yet.');
-    setContainerMessage(defenseContainer, 'No completed game data available yet.');
-    if (statusText) {
-      statusText.textContent = 'No completed games available yet.';
-    }
+    gameBanner.innerHTML = `<p class="empty">No completed games have been recorded for the 2025 season yet. Check back soon.</p>`;
+    statusText.textContent = 'No completed games available yet.';
     return;
   }
 
@@ -245,9 +232,7 @@ async function loadSpotlight() {
     defenseCount: defenseLeaders.length
   });
 
-  if (statusText) {
-    statusText.textContent = 'Spotlight updated with the latest 2025 data.';
-  }
+  statusText.textContent = 'Spotlight updated with the latest 2025 data.';
   setTimeout(() => showStatus(false), 800);
 }
 
@@ -711,78 +696,39 @@ function parseStatValue(raw) {
 }
 
 async function fetchJson(url, label) {
+  const start = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   const context = label || url;
-  const baseOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
-  const canMeasurePerformance = typeof performance !== 'undefined' && typeof performance.now === 'function';
-  let lastError;
+  logDebug('info', `Fetching ${context}.`, { url });
 
-  for (let attempt = 1; attempt <= FETCH_RETRY_LIMIT; attempt += 1) {
-    const start = canMeasurePerformance ? performance.now() : Date.now();
-    const requestUrl = new URL(PROXY_ENDPOINT, baseOrigin);
-    requestUrl.searchParams.set('url', url);
-
-    const finalUrl = requestUrl.toString();
-    logDebug('info', `Fetching ${context}.`, { url: finalUrl, attempt });
-
-    let controller;
-    let timeoutId;
-    if (typeof AbortController === 'function') {
-      controller = new AbortController();
-      timeoutId = setTimeout(() => {
-        controller.abort();
-      }, FETCH_TIMEOUT_MS);
-    }
-
-    let response;
-    try {
-      response = await fetch(finalUrl, {
-        headers: { Accept: 'application/json' },
-        signal: controller?.signal
-      });
-    } catch (networkError) {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      const duration = (canMeasurePerformance ? performance.now() : Date.now()) - start;
-      const isAbortError = networkError?.name === 'AbortError';
-      logDebug('error', isAbortError ? `Request timed out for ${context}.` : `Network error while fetching ${context}.`, {
-        url: finalUrl,
-        attempt,
-        durationMs: Math.round(duration),
-        message: networkError?.message
-      });
-      lastError = networkError;
-      throw networkError;
-    }
-
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-
-    const end = canMeasurePerformance ? performance.now() : Date.now();
-    const duration = end - start;
-
-    if (!response.ok) {
-      logDebug('error', `Request failed (${response.status}) for ${context}.`, {
-        url: finalUrl,
-        status: response.status,
-        attempt
-      });
-      lastError = new Error(`Request failed (${response.status}) for ${finalUrl}`);
-      throw lastError;
-    }
-
-    const data = await response.json();
-    logDebug('info', `Fetched ${context}.`, {
-      url: finalUrl,
-      status: response.status,
-      durationMs: Math.round(duration),
-      attempt
+  let response;
+  try {
+    response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
+  } catch (networkError) {
+    logDebug('error', `Network error while fetching ${context}.`, {
+      url,
+      message: networkError?.message
     });
-    return data;
+    throw networkError;
   }
 
-  throw lastError || new Error(`Unable to fetch ${context}`);
+  const end = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const duration = end - start;
+
+  if (!response.ok) {
+    logDebug('error', `Request failed (${response.status}) for ${context}.`, {
+      url,
+      status: response.status
+    });
+    throw new Error(`Request failed (${response.status}) for ${url}`);
+  }
+
+  const data = await response.json();
+  logDebug('info', `Fetched ${context}.`, {
+    url,
+    status: response.status,
+    durationMs: Math.round(duration)
+  });
+  return data;
 }
 
 function showStatus(visible) {
@@ -796,9 +742,7 @@ function reportError(error) {
     message: error?.message,
     stack: error?.stack
   });
-  if (statusText) {
-    statusText.textContent = 'Unable to load spotlight data. Please try again later.';
-  }
+  statusText.textContent = 'Unable to load spotlight data. Please try again later.';
   showStatus(true);
   setContainerMessage(offenseContainer, 'Data unavailable.');
   setContainerMessage(defenseContainer, 'Data unavailable.');
