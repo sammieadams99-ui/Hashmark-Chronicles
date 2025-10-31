@@ -41,6 +41,23 @@
       <span class="status-text">Loading live data from ESPN…</span>
     </div>
 
+    <footer class="debug-console" aria-label="Debug tools">
+      <button id="debug-toggle" class="debug-toggle" type="button" aria-expanded="false">
+        <span>Debug mode</span>
+        <span id="debug-count" class="debug-count" aria-hidden="true"></span>
+      </button>
+      <section id="debug-panel" class="debug-panel" hidden>
+        <header class="debug-panel-header">
+          <h2>Debug Console</h2>
+          <div class="debug-actions">
+            <button id="debug-clear" type="button" class="debug-action">Clear</button>
+            <button id="debug-close" type="button" class="debug-action" aria-label="Close debug panel">Close</button>
+          </div>
+        </header>
+        <ul id="debug-log" class="debug-log" role="log" aria-live="polite"></ul>
+      </section>
+    </footer>
+
     <template id="player-card-template">
       <article class="player-card" role="listitem" tabindex="0">
         <div class="card-front">
