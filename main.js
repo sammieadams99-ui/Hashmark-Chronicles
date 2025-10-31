@@ -6,26 +6,16 @@ const CORE_API_BASE = 'https://sports.core.api.espn.com/v2/sports/football/leagu
 
 const statusBanner = document.getElementById('status');
 const statusText = statusBanner ? statusBanner.querySelector('.status-text') : null;
-const seasonSubtitle = document.getElementById('season-subtitle');
-const seasonNote = document.getElementById('season-note');
 const offenseContainer = document.getElementById('offense-spotlight');
 const defenseContainer = document.getElementById('defense-spotlight');
 const cardTemplate = document.getElementById('player-card-template');
 const gameBanner = document.getElementById('game-banner');
-const offenseSubtitle = document.getElementById('offense-subtitle');
-const defenseSubtitle = document.getElementById('defense-subtitle');
 const debugToggle = document.getElementById('debug-toggle');
 const debugPanel = document.getElementById('debug-panel');
 const debugLogList = document.getElementById('debug-log');
 const debugCount = document.getElementById('debug-count');
 const debugClearButton = document.getElementById('debug-clear');
 const debugCloseButton = document.getElementById('debug-close');
-const debugLast = document.getElementById('debug-last');
-
-const PROXY_ENDPOINT = '/api/espn';
-const FETCH_RETRY_LIMIT = 3;
-const FETCH_TIMEOUT_MS = 8000;
-const RETRY_BACKOFF_BASE_MS = 600;
 
 const BENCHMARKS = {
   passing: { lastGameMax: 400, seasonMax: 3500 },
@@ -79,16 +69,10 @@ const athleteCache = new Map();
 const debugEntries = [];
 let debugOpen = false;
 let debugEntryId = 0;
-let activeSeason = TARGET_SEASON;
-let fallbackSeason = null;
-let lastRequestSummary = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   setupDebugConsole();
   logDebug('info', 'Debug console initialised.');
-  setContainerMessage(offenseContainer, 'Loading leaders…');
-  setContainerMessage(defenseContainer, 'Loading leaders…');
-  setGameBannerMessage('Loading the latest final game…');
   loadSpotlight().catch((error) => reportError(error));
 });
 
@@ -116,7 +100,6 @@ function setupDebugConsole() {
   }
 
   updateDebugCount();
-  updateDebugSummary(lastRequestSummary);
 }
 
 function setDebugOpen(open) {
@@ -210,120 +193,30 @@ function logDebug(level, message, details) {
   }
 }
 
-function updateSeasonCopy(season, isFallback, fallbackDetails) {
-  if (seasonSubtitle) {
-    seasonSubtitle.textContent = `${season} Offensive & Defensive Leaders`;
-  }
-
-  if (offenseSubtitle) {
-    offenseSubtitle.textContent = `Top performers from the latest ${season} contest and their season pace.`;
-  }
-
-  if (defenseSubtitle) {
-    defenseSubtitle.textContent = `Disruptors driving the Aggies' defense in ${season}.`;
-  }
-
-  if (seasonNote) {
-    if (isFallback) {
-      let note = `Showing ${season} results until ${TARGET_SEASON} data is published on ESPN.`;
-      if (fallbackDetails?.outcome === 'error') {
-        note += ` Last check for ${TARGET_SEASON}: ${fallbackDetails.message || 'request failed.'}`;
-      } else if (fallbackDetails?.outcome === 'empty') {
-        note += ` Last check found no completed games for ${TARGET_SEASON} yet.`;
-      }
-      seasonNote.textContent = note;
-      seasonNote.hidden = false;
-      seasonNote.setAttribute('aria-hidden', 'false');
-    } else {
-      seasonNote.textContent = '';
-      seasonNote.hidden = true;
-      seasonNote.setAttribute('aria-hidden', 'true');
-    }
-  }
-}
-
-function updateDebugSummary(summary) {
-  lastRequestSummary = summary;
-  if (!debugLast) {
-    return;
-  }
-
-  if (!summary) {
-    debugLast.textContent = 'No ESPN requests yet.';
-    return;
-  }
-
-  const parts = [];
-  if (summary.status !== undefined && summary.status !== null) {
-    parts.push(String(summary.status).toUpperCase());
-  }
-
-  if (typeof summary.durationMs === 'number' && Number.isFinite(summary.durationMs)) {
-    parts.push(`${Math.round(summary.durationMs)}ms`);
-  }
-
-  if (summary.cacheState) {
-    parts.push(summary.cacheState.toLowerCase());
-  }
-
-  if (typeof summary.records === 'number' && Number.isFinite(summary.records)) {
-    parts.push(`${summary.records} records`);
-  }
-
-  if (summary.attempts > 1 && summary.attempt > 1) {
-    parts.push(`attempt ${summary.attempt}/${summary.attempts}`);
-  }
-
-  if (summary.result === 'error' && summary.errorMessage) {
-    parts.push(summary.errorMessage);
-  }
-
-  const detailText = parts.length ? parts.join(' • ') : 'No details';
-  debugLast.textContent = `${summary.label}: ${detailText}`;
-}
-
 async function loadSpotlight() {
-  logDebug('info', 'Beginning spotlight refresh.', { teamId: TEAM_ID, targetSeason: TARGET_SEASON });
-  if (statusText) {
-    statusText.textContent = 'Loading live data from ESPN…';
-  }
-  updateSeasonCopy(TARGET_SEASON, false);
+  logDebug('info', 'Beginning spotlight refresh.', { season: SEASON, teamId: TEAM_ID });
+  statusText.textContent = 'Loading live data from ESPN…';
   showStatus(true);
 
-  const seasonContext = await getLatestFinalEvent();
-  if (!seasonContext) {
-    logDebug('warn', 'No completed events available for attempted seasons.', {
-      targetSeason: TARGET_SEASON,
-      fallbacks: FALLBACK_SEASONS
-    });
-    fallbackSeason = null;
-    activeSeason = TARGET_SEASON;
-    updateSeasonCopy(activeSeason, false);
-    setGameBannerMessage('ESPN has not posted any completed Aggies games yet. We will refresh automatically once results are available.');
-    setContainerMessage(offenseContainer, 'No completed game data available yet.');
-    setContainerMessage(defenseContainer, 'No completed game data available yet.');
-    if (statusText) {
-      statusText.textContent = 'Waiting for ESPN to publish game results.';
-    }
+  const latestEvent = await getLatestFinalEvent();
+  if (!latestEvent) {
+    logDebug('warn', 'No completed events available for the configured season.', { season: SEASON });
+    gameBanner.innerHTML = `<p class="empty">No completed games have been recorded for the 2025 season yet. Check back soon.</p>`;
+    statusText.textContent = 'No completed games available yet.';
     return;
   }
 
-  activeSeason = seasonContext.season;
-  fallbackSeason = seasonContext.fallbackFrom ? seasonContext.season : null;
-  updateSeasonCopy(activeSeason, Boolean(fallbackSeason), seasonContext.fallbackReason);
-
   logDebug('info', 'Latest final event identified.', {
-    eventId: seasonContext.event.id,
-    opponent: seasonContext.event.name,
-    date: seasonContext.event.date,
-    season: activeSeason
+    eventId: latestEvent.id,
+    opponent: latestEvent.name,
+    date: latestEvent.date
   });
 
-  const summary = await fetchJson(`${SITE_API_BASE}/summary?event=${seasonContext.event.id}`, `event ${seasonContext.event.id} summary`);
+  const summary = await fetchJson(`${SITE_API_BASE}/summary?event=${latestEvent.id}`, 'event summary');
   const teamBoxscore = summary.boxscore?.players?.find((group) => group.team?.id === String(TEAM_ID));
 
   if (!teamBoxscore) {
-    logDebug('error', 'Unable to find Aggies box score in summary payload.', { eventId: seasonContext.event.id });
+    logDebug('error', 'Unable to find Aggies box score in summary payload.', { eventId: latestEvent.id });
     throw new Error('Unable to locate Aggies box score data for the latest game.');
   }
 
@@ -337,79 +230,28 @@ async function loadSpotlight() {
 
   logDebug('info', 'Spotlight render complete.', {
     offenseCount: offenseLeaders.length,
-    defenseCount: defenseLeaders.length,
-    season: activeSeason
+    defenseCount: defenseLeaders.length
   });
 
-  if (statusText) {
-    statusText.textContent = fallbackSeason
-      ? `Showing ${activeSeason} results until ${TARGET_SEASON} data is published on ESPN.`
-      : `Spotlight updated with the latest ${activeSeason} data.`;
-  }
-  if (fallbackSeason) {
-    showStatus(true);
-  } else {
-    setTimeout(() => showStatus(false), 800);
-  }
+  statusText.textContent = 'Spotlight updated with the latest 2025 data.';
+  setTimeout(() => showStatus(false), 800);
 }
 
 async function getLatestFinalEvent() {
-  const seasonsToTry = [TARGET_SEASON, ...FALLBACK_SEASONS.filter((season) => season > 0)];
-  const attemptSummaries = [];
+  const schedule = await fetchJson(`${SITE_API_BASE}/teams/${TEAM_ID}/schedule?season=${SEASON}`, 'team schedule');
+  const finalEvents = (schedule.events || []).filter((event) => {
+    const competition = event.competitions?.[0];
+    return competition?.status?.type?.name === 'STATUS_FINAL';
+  });
 
-  for (const season of seasonsToTry) {
-    try {
-      const schedule = await fetchJson(`${SITE_API_BASE}/teams/${TEAM_ID}/schedule?season=${season}`, `team schedule ${season}`);
-      const finalEvents = (schedule.events || []).filter((event) => {
-        const competition = event.competitions?.[0];
-        return competition?.status?.type?.name === 'STATUS_FINAL';
-      });
-
-      if (!finalEvents.length) {
-        logDebug('warn', 'Schedule does not contain any final events.', { season });
-        attemptSummaries.push({ season, outcome: 'empty', totalEvents: schedule.events?.length || 0 });
-        continue;
-      }
-
-      finalEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
-      logDebug('info', 'Resolved final events from schedule.', { count: finalEvents.length, season });
-
-      if (season !== TARGET_SEASON) {
-        const fallbackReason = attemptSummaries.find((entry) => entry.season === TARGET_SEASON) || null;
-        logDebug('warn', 'Falling back to previous season schedule.', {
-          targetSeason: TARGET_SEASON,
-          fallbackSeason: season,
-          reason: fallbackReason
-        });
-        return {
-          season,
-          event: finalEvents[finalEvents.length - 1],
-          fallbackFrom: TARGET_SEASON,
-          fallbackReason
-        };
-      }
-
-      return {
-        season,
-        event: finalEvents[finalEvents.length - 1],
-        fallbackFrom: null,
-        fallbackReason: null
-      };
-    } catch (error) {
-      logDebug('error', 'Network error while fetching team schedule.', {
-        season,
-        message: error?.message,
-        status: error?.status
-      });
-      attemptSummaries.push({ season, outcome: 'error', message: error?.message, status: error?.status });
-      continue;
-    }
+  if (!finalEvents.length) {
+    logDebug('warn', 'Schedule does not contain any final events.', { season: SEASON });
+    return null;
   }
 
-  logDebug('error', 'Unable to resolve completed events after exhausting fallbacks.', {
-    attempts: attemptSummaries
-  });
-  return null;
+  finalEvents.sort((a, b) => new Date(a.date) - new Date(b.date));
+  logDebug('info', 'Resolved final events from schedule.', { count: finalEvents.length });
+  return finalEvents[finalEvents.length - 1];
 }
 
 async function buildOffenseLeaders(statistics, season) {
@@ -490,7 +332,7 @@ async function buildLeadersFromConfigs(statistics, configs, season) {
       continue;
     }
 
-    const playerPackage = await fetchAthletePackage(leader.athlete.id, season);
+    const playerPackage = await fetchAthletePackage(leader.athlete.id);
     if (!playerPackage.stats) {
       logDebug('warn', `Season statistics payload missing for ${leader.athlete.displayName}.`, {
         athleteId: leader.athlete.id,
@@ -608,31 +450,28 @@ function buildDetailsList(block, stats) {
     .filter((item) => item.value !== undefined && item.value !== null && item.value !== '');
 }
 
-async function fetchAthletePackage(athleteId, season) {
-  const resolvedSeason = season || activeSeason || TARGET_SEASON;
-  const cacheKey = `${resolvedSeason}:${athleteId}`;
-
-  if (athleteCache.has(cacheKey)) {
-    logDebug('info', `Using cached athlete package.`, { athleteId, season: resolvedSeason });
-    return athleteCache.get(cacheKey);
+async function fetchAthletePackage(athleteId) {
+  if (athleteCache.has(athleteId)) {
+    logDebug('info', `Using cached athlete package.`, { athleteId });
+    return athleteCache.get(athleteId);
   }
 
-  const profileUrl = `${CORE_API_BASE}/seasons/${resolvedSeason}/athletes/${athleteId}?lang=en&region=us`;
-  logDebug('info', 'Fetching athlete profile.', { athleteId, season: resolvedSeason });
-  const profile = await fetchJson(profileUrl, `athlete ${athleteId} profile (${resolvedSeason})`);
+  const profileUrl = `${CORE_API_BASE}/seasons/${SEASON}/athletes/${athleteId}?lang=en&region=us`;
+  logDebug('info', 'Fetching athlete profile.', { athleteId });
+  const profile = await fetchJson(profileUrl, `athlete ${athleteId} profile`);
   let stats = null;
 
   if (profile.statistics?.$ref) {
     const statsUrl = profile.statistics.$ref.replace('http://', 'https://');
-    logDebug('info', 'Fetching athlete statistics.', { athleteId, season: resolvedSeason });
-    stats = await fetchJson(statsUrl, `athlete ${athleteId} statistics (${resolvedSeason})`);
+    logDebug('info', 'Fetching athlete statistics.', { athleteId });
+    stats = await fetchJson(statsUrl, `athlete ${athleteId} statistics`);
   } else {
-    logDebug('warn', 'Statistics reference missing from athlete profile.', { athleteId, season: resolvedSeason });
+    logDebug('warn', 'Statistics reference missing from athlete profile.', { athleteId });
   }
 
   const result = { profile, stats };
-  athleteCache.set(cacheKey, result);
-  logDebug('info', 'Athlete package cached.', { athleteId, season: resolvedSeason });
+  athleteCache.set(athleteId, result);
+  logDebug('info', 'Athlete package cached.', { athleteId });
   return result;
 }
 
@@ -862,203 +701,40 @@ function parseStatValue(raw) {
   return numeric ? Number(numeric) : 0;
 }
 
-function shouldRetryResponse(status) {
-  return status === 408 || status === 429 || status >= 500;
-}
-
-function isRetryableNetworkError(error) {
-  return (
-    error?.name === 'AbortError' ||
-    error?.name === 'TypeError' ||
-    error?.message === 'Failed to fetch'
-  );
-}
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function parseHeaderNumber(value) {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 async function fetchJson(url, label) {
+  const start = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
   const context = label || url;
-  const baseOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
-  const canMeasurePerformance = typeof performance !== 'undefined' && typeof performance.now === 'function';
-  let lastError;
+  logDebug('info', `Fetching ${context}.`, { url });
 
-  for (let attempt = 1; attempt <= FETCH_RETRY_LIMIT; attempt += 1) {
-    const attempts = FETCH_RETRY_LIMIT;
-    const start = canMeasurePerformance ? performance.now() : Date.now();
-    const requestUrl = new URL(PROXY_ENDPOINT, baseOrigin);
-    requestUrl.searchParams.set('url', url);
-
-    const finalUrl = requestUrl.toString();
-    logDebug('info', `Fetching ${context}.`, { url: finalUrl, attempt });
-
-    let controller;
-    let timeoutId;
-    if (typeof AbortController === 'function') {
-      controller = new AbortController();
-      timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    }
-
-    try {
-      const response = await fetch(finalUrl, {
-        headers: { Accept: 'application/json' },
-        signal: controller?.signal
-      });
-
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-
-      const end = canMeasurePerformance ? performance.now() : Date.now();
-      const duration = end - start;
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        let parsedError;
-        try {
-          parsedError = errorBody ? JSON.parse(errorBody) : null;
-        } catch (parseError) {
-          parsedError = null;
-        }
-
-        const preview = typeof errorBody === 'string' ? errorBody.slice(0, 200) : '';
-        logDebug('error', `Request failed (${response.status}) for ${context}.`, {
-          url: finalUrl,
-          status: response.status,
-          attempt,
-          durationMs: Math.round(duration),
-          preview,
-          details: parsedError?.error || parsedError?.message || parsedError?.details
-        });
-
-        const error = new Error(`Request failed (${response.status}) for ${context}`);
-        error.status = response.status;
-        error.preview = preview;
-        error.details = parsedError ?? preview;
-        lastError = error;
-
-        if (shouldRetryResponse(response.status) && attempt < attempts) {
-          const backoff = Math.pow(2, attempt - 1) * RETRY_BACKOFF_BASE_MS;
-          logDebug('info', `Retrying ${context} after upstream error.`, {
-            attempt: attempt + 1,
-            backoffMs: backoff
-          });
-          await wait(backoff);
-          continue;
-        }
-
-        updateDebugSummary({
-          label: context,
-          status: response.status,
-          durationMs: Math.round(duration),
-          cacheState: response.headers.get('x-espn-cache') || undefined,
-          records: parseHeaderNumber(response.headers.get('x-espn-records')),
-          result: 'error',
-          attempt,
-          attempts,
-          errorMessage:
-            parsedError?.error ||
-            parsedError?.message ||
-            parsedError?.details ||
-            (preview ? `${preview}…` : 'Upstream error')
-        });
-
-        throw error;
-      }
-
-      const data = await response.json();
-      const cacheState = response.headers.get('x-espn-cache') || 'MISS';
-      const serverDuration = parseHeaderNumber(response.headers.get('x-espn-duration-ms'));
-      const records = parseHeaderNumber(response.headers.get('x-espn-records'));
-      const durationMs = Number.isFinite(serverDuration) ? serverDuration : Math.round(duration);
-
-      logDebug('info', `Fetched ${context}.`, {
-        url: finalUrl,
-        status: response.status,
-        durationMs,
-        attempt,
-        cache: cacheState,
-        records
-      });
-
-      updateDebugSummary({
-        label: context,
-        status: response.status,
-        durationMs,
-        cacheState,
-        records,
-        result: 'success',
-        attempt,
-        attempts
-      });
-
-      return data;
-    } catch (networkError) {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-
-      const end = canMeasurePerformance ? performance.now() : Date.now();
-      const duration = end - start;
-      const isAbortError = networkError?.name === 'AbortError';
-
-      logDebug('error', isAbortError ? `Request timed out for ${context}.` : `Network error while fetching ${context}.`, {
-        url: finalUrl,
-        attempt,
-        durationMs: Math.round(duration),
-        message: networkError?.message
-      });
-
-      lastError = networkError;
-
-      if (attempt < attempts && isRetryableNetworkError(networkError)) {
-        const backoff = Math.pow(2, attempt - 1) * RETRY_BACKOFF_BASE_MS;
-        logDebug('info', `Retrying ${context} after delay.`, {
-          attempt: attempt + 1,
-          backoffMs: backoff
-        });
-        await wait(backoff);
-        continue;
-      }
-
-      updateDebugSummary({
-        label: context,
-        status: isAbortError ? 'TIMEOUT' : networkError?.status || 'NETWORK',
-        durationMs: Math.round(duration),
-        cacheState: undefined,
-        records: undefined,
-        result: 'error',
-        attempt,
-        attempts,
-        errorMessage: isAbortError ? 'Timed out' : networkError?.message || 'Network error'
-      });
-
-      throw networkError;
-    }
+  let response;
+  try {
+    response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
+  } catch (networkError) {
+    logDebug('error', `Network error while fetching ${context}.`, {
+      url,
+      message: networkError?.message
+    });
+    throw networkError;
   }
 
-  updateDebugSummary({
-    label: context,
-    status: lastError?.status || 'ERROR',
-    durationMs: undefined,
-    cacheState: undefined,
-    records: undefined,
-    result: 'error',
-    attempt: FETCH_RETRY_LIMIT,
-    attempts: FETCH_RETRY_LIMIT,
-    errorMessage: lastError?.message || `Unable to fetch ${context}`
-  });
+  const end = typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now();
+  const duration = end - start;
 
-  throw lastError || new Error(`Unable to fetch ${context}`);
+  if (!response.ok) {
+    logDebug('error', `Request failed (${response.status}) for ${context}.`, {
+      url,
+      status: response.status
+    });
+    throw new Error(`Request failed (${response.status}) for ${url}`);
+  }
+
+  const data = await response.json();
+  logDebug('info', `Fetched ${context}.`, {
+    url,
+    status: response.status,
+    durationMs: Math.round(duration)
+  });
+  return data;
 }
 
 function showStatus(visible) {
@@ -1072,9 +748,7 @@ function reportError(error) {
     message: error?.message,
     stack: error?.stack
   });
-  if (statusText) {
-    statusText.textContent = 'Unable to load spotlight data. Please try again later.';
-  }
+  statusText.textContent = 'Unable to load spotlight data. Please try again later.';
   showStatus(true);
   setContainerMessage(offenseContainer, 'Data unavailable.');
   setContainerMessage(defenseContainer, 'Data unavailable.');

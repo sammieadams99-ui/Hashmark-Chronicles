@@ -328,21 +328,6 @@ body {
   transition: background 160ms ease, color 160ms ease;
 }
 
-.debug-last {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-weight: 500;
-  max-width: 220px;
-  text-align: left;
-  white-space: normal;
-  line-height: 1.2;
-}
-
-.debug-toggle:hover .debug-last,
-.debug-toggle:focus-visible .debug-last {
-  color: rgba(255, 255, 255, 0.9);
-}
-
 .debug-toggle:hover,
 .debug-toggle:focus-visible {
   background: var(--accent);
