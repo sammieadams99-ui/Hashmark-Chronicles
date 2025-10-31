@@ -12,7 +12,8 @@
         <img src="https://upload.wikimedia.org/wikipedia/en/1/18/New_Mexico_State_Aggies_logo.svg" alt="New Mexico State Aggies logo" class="logo" />
         <div>
           <h1>New Mexico State Aggies Spotlight</h1>
-          <p class="subtitle">2025 Offensive &amp; Defensive Leaders</p>
+          <p id="season-subtitle" class="subtitle">Aggies Offensive &amp; Defensive Leaders</p>
+          <p id="season-note" class="season-note" role="status" aria-live="polite" hidden></p>
         </div>
       </div>
       <div id="game-banner" class="game-banner" aria-live="polite"></div>
@@ -22,7 +23,7 @@
       <section aria-labelledby="offense-title">
         <header class="section-header">
           <h2 id="offense-title">Offensive Leaders</h2>
-          <p class="section-subtitle">Top performers from the latest 2025 contest and their season pace.</p>
+          <p id="offense-subtitle" class="section-subtitle">Top performers from the latest contest and their season pace.</p>
         </header>
         <div id="offense-spotlight" class="spotlight-grid" role="list"></div>
       </section>
@@ -30,7 +31,7 @@
       <section aria-labelledby="defense-title">
         <header class="section-header">
           <h2 id="defense-title">Defensive Leaders</h2>
-          <p class="section-subtitle">Disruptors driving the Aggies' defense in 2025.</p>
+          <p id="defense-subtitle" class="section-subtitle">Disruptors driving the Aggies' defense this season.</p>
         </header>
         <div id="defense-spotlight" class="spotlight-grid" role="list"></div>
       </section>
@@ -40,6 +41,24 @@
       <span class="spinner" aria-hidden="true"></span>
       <span class="status-text">Loading live data from ESPN…</span>
     </div>
+
+    <footer class="debug-console" aria-label="Debug tools">
+      <button id="debug-toggle" class="debug-toggle" type="button" aria-expanded="false">
+        <span>Debug mode</span>
+        <span id="debug-count" class="debug-count" aria-hidden="true"></span>
+        <span id="debug-last" class="debug-last" aria-live="polite"></span>
+      </button>
+      <section id="debug-panel" class="debug-panel" hidden>
+        <header class="debug-panel-header">
+          <h2>Debug Console</h2>
+          <div class="debug-actions">
+            <button id="debug-clear" type="button" class="debug-action">Clear</button>
+            <button id="debug-close" type="button" class="debug-action" aria-label="Close debug panel">Close</button>
+          </div>
+        </header>
+        <ul id="debug-log" class="debug-log" role="log" aria-live="polite"></ul>
+      </section>
+    </footer>
 
     <template id="player-card-template">
       <article class="player-card" role="listitem" tabindex="0">
@@ -70,7 +89,7 @@
             <ul class="card-list card-last-list"></ul>
           </div>
           <div class="card-details-section">
-            <h4>2025 Season Snapshot</h4>
+            <h4 class="card-season-heading">Season Snapshot</h4>
             <ul class="card-list card-season-list"></ul>
           </div>
           <a class="card-link" target="_blank" rel="noopener noreferrer">View full ESPN profile</a>
