@@ -3,6 +3,7 @@ const TARGET_SEASON = 2025;
 const SCHEDULE_PAGE_URL = `https://www.espn.com/college-football/team/schedule/_/id/${TEAM_ID}`;
 const STATS_PAGE_URL = `https://www.espn.com/college-football/team/stats/_/id/${TEAM_ID}`;
 const ESPN_PAGE_PROXY_PATH = '/api/espn-page';
+const ESPN_PROXY_FALLBACKS = ['/.netlify/functions/espn-page'];
 
 const FETCH_TIMEOUT_MS = 8000;
 const RETRY_BASE_DELAY_MS = 2000;
@@ -142,6 +143,8 @@ async function fetchStatsData() {
 
 async function fetchEspnPageJson(url, label, transform) {
   let attempt = 1;
+  const proxyCandidates = buildProxyCandidateList();
+  let proxyIndex = 0;
 
   while (true) {
     const start = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
@@ -149,8 +152,9 @@ async function fetchEspnPageJson(url, label, transform) {
     const timeoutId = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
 
     try {
-      const proxyUrl = `${ESPN_PAGE_PROXY_PATH}?url=${encodeURIComponent(url)}`;
-      logDebug('info', `Fetching ${label}.`, { url, proxyUrl, attempt });
+      const proxyPath = proxyCandidates[proxyIndex];
+      const proxyUrl = `${proxyPath}?url=${encodeURIComponent(url)}`;
+      logDebug('info', `Fetching ${label}.`, { url, proxyUrl, attempt, proxyPath });
       const response = await fetch(proxyUrl, {
         signal: controller?.signal,
         headers: { 'Cache-Control': 'no-cache' }
@@ -161,8 +165,33 @@ async function fetchEspnPageJson(url, label, transform) {
       }
 
       if (!response.ok) {
+        const upstreamStatus = response.headers.get('x-espn-status');
+        if (
+          response.status === 404 &&
+          !upstreamStatus &&
+          proxyIndex < proxyCandidates.length - 1
+        ) {
+          const fallbackPath = proxyCandidates[proxyIndex + 1];
+          logDebug('warn', 'Primary proxy returned 404, attempting fallback.', {
+            label,
+            proxyPath,
+            fallbackPath
+          });
+          proxyIndex += 1;
+          attempt = 1;
+          await response.text().catch(() => '');
+          continue;
+        }
+
+        const bodyText = await response.text().catch(() => '');
         const error = new Error(`Received ${response.status} from ESPN ${label}`);
         error.status = response.status;
+        if (upstreamStatus) {
+          error.upstreamStatus = Number(upstreamStatus);
+        }
+        if (bodyText) {
+          error.responseBody = bodyText.slice(0, 2000);
+        }
         throw error;
       }
 
@@ -186,6 +215,7 @@ async function fetchEspnPageJson(url, label, transform) {
         durationMs,
         attempt,
         cacheState,
+        proxyPath,
         upstreamStatus: upstreamStatus ? Number(upstreamStatus) : undefined
       });
 
@@ -214,13 +244,28 @@ async function fetchEspnPageJson(url, label, transform) {
         status,
         durationMs,
         retryInMs: retryDelay,
-        message: error?.message
+        message: error?.message,
+        proxyPath: proxyCandidates[proxyIndex],
+        upstreamStatus: error?.upstreamStatus
       });
 
       await wait(retryDelay);
       attempt += 1;
     }
   }
+}
+
+function buildProxyCandidateList() {
+  const candidates = [ESPN_PAGE_PROXY_PATH, ...ESPN_PROXY_FALLBACKS];
+  const unique = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate && !seen.has(candidate)) {
+      unique.push(candidate);
+      seen.add(candidate);
+    }
+  }
+  return unique;
 }
 
 function renderSpotlight(scheduleData, statsData) {
@@ -254,8 +299,9 @@ function renderGameBanner(scheduleData) {
     chunks.push(descriptor);
   }
 
-  if (scheduleData.lastFinal?.date) {
-    chunks.push(dateFormatter.format(new Date(scheduleData.lastFinal.date)));
+  const lastFinalDate = parseEspnDate(scheduleData.lastFinal?.date);
+  if (lastFinalDate) {
+    chunks.push(dateFormatter.format(lastFinalDate));
   }
 
   if (scheduleData.record) {
@@ -281,15 +327,21 @@ function renderLeaders(container, statsData, desiredTypes, record) {
 
   const leaders = desiredTypes
     .map((descriptor) => {
-      const match = statsData.leaders.find((leader) => leader.type === descriptor.type);
+      const match = statsData?.leaders?.find((leader) => leader.type === descriptor.type);
       if (!match) {
         return null;
       }
+
+      const primary = resolvePrimaryLeader(match, descriptor.heading);
+      if (!primary) {
+        return null;
+      }
+
       return {
         heading: descriptor.heading,
-        label: match.label,
-        value: match.value,
-        athlete: match.athlete
+        label: primary.label || descriptor.heading,
+        value: primary.value || 'N/A',
+        athlete: primary.athlete
       };
     })
     .filter(Boolean);
@@ -338,6 +390,147 @@ function populateLeaderCard(card, leader, record) {
   link.textContent = `View ${leader.athlete?.name || 'Aggies'} on ESPN`;
 
   setupCardInteractions(card);
+}
+
+function resolvePrimaryLeader(match, fallbackLabel) {
+  const sources = [];
+
+  if (Array.isArray(match.leaders) && match.leaders.length) {
+    sources.push(match.leaders[0]);
+  }
+
+  if (Array.isArray(match.leaderboard) && match.leaderboard.length) {
+    sources.push(match.leaderboard[0]);
+  }
+
+  sources.push(match);
+
+  for (const source of sources) {
+    const normalized = normalizeLeaderSource(source, match, fallbackLabel);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function normalizeLeaderSource(source, container, fallbackLabel) {
+  if (!source) {
+    return null;
+  }
+
+  const athlete = normalizeLeaderAthlete(source.athlete);
+  const label = firstNonEmpty([
+    source.displayName,
+    source.label,
+    container?.displayName,
+    container?.label,
+    fallbackLabel
+  ]);
+
+  const rawValue = source.displayValue ?? source.value;
+  const value = rawValue == null
+    ? ''
+    : typeof rawValue === 'number'
+      ? rawValue.toLocaleString('en-US')
+      : String(rawValue);
+
+  if (!athlete && !value && !label) {
+    return null;
+  }
+
+  return { athlete, label, value };
+}
+
+function normalizeLeaderAthlete(rawAthlete) {
+  if (!rawAthlete) {
+    return null;
+  }
+
+  const athlete = { ...rawAthlete };
+  if (!athlete.name) {
+    const normalizedName = firstNonEmpty([
+      athlete.displayName,
+      athlete.fullName,
+      athlete.shortName,
+      athlete.abbrev,
+      athlete.initials
+    ]);
+    if (normalizedName) {
+      athlete.name = normalizedName;
+    }
+  }
+
+  return athlete;
+}
+
+function firstNonEmpty(values) {
+  return values?.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
+}
+
+function parseEspnDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.valueOf()) ? null : value;
+  }
+
+  if (typeof value === 'number') {
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? null : date;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const direct = new Date(trimmed);
+    if (!Number.isNaN(direct.valueOf())) {
+      return direct;
+    }
+
+    if (/^\d+$/.test(trimmed)) {
+      const timestamp = Number(trimmed);
+      if (trimmed.length === 13) {
+        const dateFromMs = new Date(timestamp);
+        if (!Number.isNaN(dateFromMs.valueOf())) {
+          return dateFromMs;
+        }
+      } else if (trimmed.length === 10) {
+        const dateFromSeconds = new Date(timestamp * 1000);
+        if (!Number.isNaN(dateFromSeconds.valueOf())) {
+          return dateFromSeconds;
+        }
+      }
+    }
+
+    const numericIsoMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(?:Z)?$/);
+    if (numericIsoMatch) {
+      const [, year, month, day, hour, minute, second] = numericIsoMatch;
+      const iso = `${year}-${month}-${day}T${hour}:${minute}:${second || '00'}Z`;
+      const isoDate = new Date(iso);
+      if (!Number.isNaN(isoDate.valueOf())) {
+        return isoDate;
+      }
+    }
+
+    const offsetMatch = trimmed.match(/^(.*)([+-]\d{4})$/);
+    if (offsetMatch) {
+      const [, base, offset] = offsetMatch;
+      const iso = `${base}${offset.slice(0, 3)}:${offset.slice(3)}`;
+      const offsetDate = new Date(iso);
+      if (!Number.isNaN(offsetDate.valueOf())) {
+        return offsetDate;
+      }
+    }
+  }
+
+  return null;
 }
 
 function createDetailItem(label, value) {
