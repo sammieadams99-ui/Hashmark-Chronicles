@@ -281,15 +281,26 @@ function renderLeaders(container, statsData, desiredTypes, record) {
 
   const leaders = desiredTypes
     .map((descriptor) => {
-      const match = statsData.leaders.find((leader) => leader.type === descriptor.type);
+      const match = statsData?.leaders?.find((leader) => leader.type === descriptor.type);
       if (!match) {
         return null;
       }
+
+      const primaryLeader = Array.isArray(match.leaders) ? match.leaders[0] : null;
+      if (!primaryLeader) {
+        return null;
+      }
+
+      const athlete = primaryLeader.athlete ? { ...primaryLeader.athlete } : null;
+      if (athlete && !athlete.name) {
+        athlete.name = athlete.displayName || athlete.fullName || athlete.shortName;
+      }
+
       return {
         heading: descriptor.heading,
-        label: match.label,
-        value: match.value,
-        athlete: match.athlete
+        label: primaryLeader.displayName || match.displayName || match.label || descriptor.heading,
+        value: primaryLeader.displayValue || primaryLeader.value || '',
+        athlete
       };
     })
     .filter(Boolean);
