@@ -332,16 +332,21 @@ function renderLeaders(container, statsData, desiredTypes, record) {
         return null;
       }
 
-      const primary = resolvePrimaryLeader(match, descriptor.heading);
-      if (!primary) {
+      const primaryLeader = Array.isArray(match.leaders) ? match.leaders[0] : null;
+      if (!primaryLeader) {
         return null;
+      }
+
+      const athlete = primaryLeader.athlete ? { ...primaryLeader.athlete } : null;
+      if (athlete && !athlete.name) {
+        athlete.name = athlete.displayName || athlete.fullName || athlete.shortName;
       }
 
       return {
         heading: descriptor.heading,
-        label: primary.label || descriptor.heading,
-        value: primary.value || 'N/A',
-        athlete: primary.athlete
+        label: primaryLeader.displayName || match.displayName || match.label || descriptor.heading,
+        value: primaryLeader.displayValue || primaryLeader.value || '',
+        athlete
       };
     })
     .filter(Boolean);
@@ -390,83 +395,6 @@ function populateLeaderCard(card, leader, record) {
   link.textContent = `View ${leader.athlete?.name || 'Aggies'} on ESPN`;
 
   setupCardInteractions(card);
-}
-
-function resolvePrimaryLeader(match, fallbackLabel) {
-  const sources = [];
-
-  if (Array.isArray(match.leaders) && match.leaders.length) {
-    sources.push(match.leaders[0]);
-  }
-
-  if (Array.isArray(match.leaderboard) && match.leaderboard.length) {
-    sources.push(match.leaderboard[0]);
-  }
-
-  sources.push(match);
-
-  for (const source of sources) {
-    const normalized = normalizeLeaderSource(source, match, fallbackLabel);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  return null;
-}
-
-function normalizeLeaderSource(source, container, fallbackLabel) {
-  if (!source) {
-    return null;
-  }
-
-  const athlete = normalizeLeaderAthlete(source.athlete);
-  const label = firstNonEmpty([
-    source.displayName,
-    source.label,
-    container?.displayName,
-    container?.label,
-    fallbackLabel
-  ]);
-
-  const rawValue = source.displayValue ?? source.value;
-  const value = rawValue == null
-    ? ''
-    : typeof rawValue === 'number'
-      ? rawValue.toLocaleString('en-US')
-      : String(rawValue);
-
-  if (!athlete && !value && !label) {
-    return null;
-  }
-
-  return { athlete, label, value };
-}
-
-function normalizeLeaderAthlete(rawAthlete) {
-  if (!rawAthlete) {
-    return null;
-  }
-
-  const athlete = { ...rawAthlete };
-  if (!athlete.name) {
-    const normalizedName = firstNonEmpty([
-      athlete.displayName,
-      athlete.fullName,
-      athlete.shortName,
-      athlete.abbrev,
-      athlete.initials
-    ]);
-    if (normalizedName) {
-      athlete.name = normalizedName;
-    }
-  }
-
-  return athlete;
-}
-
-function firstNonEmpty(values) {
-  return values?.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
 }
 
 function parseEspnDate(value) {
