@@ -251,6 +251,9 @@ async function fetchEspnPageJson(url, label, transform) {
 
       await wait(retryDelay);
       attempt += 1;
+      if (proxyCandidates.length > 1) {
+        proxyIndex = (proxyIndex + 1) % proxyCandidates.length;
+      }
     }
   }
 }
