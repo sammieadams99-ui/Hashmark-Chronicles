@@ -254,8 +254,9 @@ function renderGameBanner(scheduleData) {
     chunks.push(descriptor);
   }
 
-  if (scheduleData.lastFinal?.date) {
-    chunks.push(dateFormatter.format(new Date(scheduleData.lastFinal.date)));
+  const lastFinalDate = parseEspnDate(scheduleData.lastFinal?.date);
+  if (lastFinalDate) {
+    chunks.push(dateFormatter.format(lastFinalDate));
   }
 
   if (scheduleData.record) {
@@ -281,15 +282,26 @@ function renderLeaders(container, statsData, desiredTypes, record) {
 
   const leaders = desiredTypes
     .map((descriptor) => {
-      const match = statsData.leaders.find((leader) => leader.type === descriptor.type);
+      const match = statsData?.leaders?.find((leader) => leader.type === descriptor.type);
       if (!match) {
         return null;
       }
+
+      const primaryLeader = Array.isArray(match.leaders) ? match.leaders[0] : null;
+      if (!primaryLeader) {
+        return null;
+      }
+
+      const athlete = primaryLeader.athlete ? { ...primaryLeader.athlete } : null;
+      if (athlete && !athlete.name) {
+        athlete.name = athlete.displayName || athlete.fullName || athlete.shortName;
+      }
+
       return {
         heading: descriptor.heading,
-        label: match.label,
-        value: match.value,
-        athlete: match.athlete
+        label: primaryLeader.displayName || match.displayName || match.label || descriptor.heading,
+        value: primaryLeader.displayValue || primaryLeader.value || '',
+        athlete
       };
     })
     .filter(Boolean);
@@ -338,6 +350,70 @@ function populateLeaderCard(card, leader, record) {
   link.textContent = `View ${leader.athlete?.name || 'Aggies'} on ESPN`;
 
   setupCardInteractions(card);
+}
+
+function parseEspnDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.valueOf()) ? null : value;
+  }
+
+  if (typeof value === 'number') {
+    const date = new Date(value);
+    return Number.isNaN(date.valueOf()) ? null : date;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const direct = new Date(trimmed);
+    if (!Number.isNaN(direct.valueOf())) {
+      return direct;
+    }
+
+    if (/^\d+$/.test(trimmed)) {
+      const timestamp = Number(trimmed);
+      if (trimmed.length === 13) {
+        const dateFromMs = new Date(timestamp);
+        if (!Number.isNaN(dateFromMs.valueOf())) {
+          return dateFromMs;
+        }
+      } else if (trimmed.length === 10) {
+        const dateFromSeconds = new Date(timestamp * 1000);
+        if (!Number.isNaN(dateFromSeconds.valueOf())) {
+          return dateFromSeconds;
+        }
+      }
+    }
+
+    const numericIsoMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(?:Z)?$/);
+    if (numericIsoMatch) {
+      const [, year, month, day, hour, minute, second] = numericIsoMatch;
+      const iso = `${year}-${month}-${day}T${hour}:${minute}:${second || '00'}Z`;
+      const isoDate = new Date(iso);
+      if (!Number.isNaN(isoDate.valueOf())) {
+        return isoDate;
+      }
+    }
+
+    const offsetMatch = trimmed.match(/^(.*)([+-]\d{4})$/);
+    if (offsetMatch) {
+      const [, base, offset] = offsetMatch;
+      const iso = `${base}${offset.slice(0, 3)}:${offset.slice(3)}`;
+      const offsetDate = new Date(iso);
+      if (!Number.isNaN(offsetDate.valueOf())) {
+        return offsetDate;
+      }
+    }
+  }
+
+  return null;
 }
 
 function createDetailItem(label, value) {
