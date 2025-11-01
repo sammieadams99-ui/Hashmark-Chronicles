@@ -3,6 +3,7 @@ const TARGET_SEASON = 2025;
 const SCHEDULE_PAGE_URL = `https://www.espn.com/college-football/team/schedule/_/id/${TEAM_ID}`;
 const STATS_PAGE_URL = `https://www.espn.com/college-football/team/stats/_/id/${TEAM_ID}`;
 const ESPN_PAGE_PROXY_PATH = '/api/espn-page';
+const ESPN_PROXY_FALLBACKS = ['/.netlify/functions/espn-page'];
 
 const FETCH_TIMEOUT_MS = 8000;
 const RETRY_BASE_DELAY_MS = 2000;
@@ -142,6 +143,8 @@ async function fetchStatsData() {
 
 async function fetchEspnPageJson(url, label, transform) {
   let attempt = 1;
+  const proxyCandidates = buildProxyCandidateList();
+  let proxyIndex = 0;
 
   while (true) {
     const start = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
@@ -149,8 +152,9 @@ async function fetchEspnPageJson(url, label, transform) {
     const timeoutId = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
 
     try {
-      const proxyUrl = `${ESPN_PAGE_PROXY_PATH}?url=${encodeURIComponent(url)}`;
-      logDebug('info', `Fetching ${label}.`, { url, proxyUrl, attempt });
+      const proxyPath = proxyCandidates[proxyIndex];
+      const proxyUrl = `${proxyPath}?url=${encodeURIComponent(url)}`;
+      logDebug('info', `Fetching ${label}.`, { url, proxyUrl, attempt, proxyPath });
       const response = await fetch(proxyUrl, {
         signal: controller?.signal,
         headers: { 'Cache-Control': 'no-cache' }
@@ -161,8 +165,33 @@ async function fetchEspnPageJson(url, label, transform) {
       }
 
       if (!response.ok) {
+        const upstreamStatus = response.headers.get('x-espn-status');
+        if (
+          response.status === 404 &&
+          !upstreamStatus &&
+          proxyIndex < proxyCandidates.length - 1
+        ) {
+          const fallbackPath = proxyCandidates[proxyIndex + 1];
+          logDebug('warn', 'Primary proxy returned 404, attempting fallback.', {
+            label,
+            proxyPath,
+            fallbackPath
+          });
+          proxyIndex += 1;
+          attempt = 1;
+          await response.text().catch(() => '');
+          continue;
+        }
+
+        const bodyText = await response.text().catch(() => '');
         const error = new Error(`Received ${response.status} from ESPN ${label}`);
         error.status = response.status;
+        if (upstreamStatus) {
+          error.upstreamStatus = Number(upstreamStatus);
+        }
+        if (bodyText) {
+          error.responseBody = bodyText.slice(0, 2000);
+        }
         throw error;
       }
 
@@ -186,6 +215,7 @@ async function fetchEspnPageJson(url, label, transform) {
         durationMs,
         attempt,
         cacheState,
+        proxyPath,
         upstreamStatus: upstreamStatus ? Number(upstreamStatus) : undefined
       });
 
@@ -214,13 +244,28 @@ async function fetchEspnPageJson(url, label, transform) {
         status,
         durationMs,
         retryInMs: retryDelay,
-        message: error?.message
+        message: error?.message,
+        proxyPath: proxyCandidates[proxyIndex],
+        upstreamStatus: error?.upstreamStatus
       });
 
       await wait(retryDelay);
       attempt += 1;
     }
   }
+}
+
+function buildProxyCandidateList() {
+  const candidates = [ESPN_PAGE_PROXY_PATH, ...ESPN_PROXY_FALLBACKS];
+  const unique = [];
+  const seen = new Set();
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate && !seen.has(candidate)) {
+      unique.push(candidate);
+      seen.add(candidate);
+    }
+  }
+  return unique;
 }
 
 function renderSpotlight(scheduleData, statsData) {
